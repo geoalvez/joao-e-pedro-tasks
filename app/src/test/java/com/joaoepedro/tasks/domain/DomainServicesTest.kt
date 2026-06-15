@@ -4,6 +4,7 @@ import com.joaoepedro.tasks.data.ActivityTask
 import com.joaoepedro.tasks.data.Mission
 import com.joaoepedro.tasks.data.MissionPhase
 import com.joaoepedro.tasks.data.Periodicity
+import com.joaoepedro.tasks.data.PunishmentSession
 import com.joaoepedro.tasks.data.RewardTransaction
 import com.joaoepedro.tasks.data.TransactionType
 import org.junit.Assert.assertFalse
@@ -173,6 +174,28 @@ class DomainServicesTest {
     }
 
     @Test
+    fun missionRewardIsCreditedOnlyForParticipantWhoCompletedOnce() {
+        val mission = Mission(
+            title = "Arrumar quarto",
+            rewardPersonId = "joao",
+            rewardAmount = 10,
+            participantIds = listOf("joao", "pedro"),
+            phases = listOf(
+                MissionPhase(title = "Etapa 1", checkedParticipantIds = listOf("joao")),
+                MissionPhase(title = "Etapa 2", checkedParticipantIds = listOf("joao"))
+            )
+        )
+
+        assertTrue(mission.shouldCreditRewardFor("joao"))
+        assertFalse(mission.shouldCreditRewardFor("pedro"))
+
+        val paid = mission.markRewardPaidFor("joao")
+
+        assertFalse(paid.shouldCreditRewardFor("joao"))
+        assertFalse(paid.isCompleted())
+    }
+
+    @Test
     fun missionWithoutPhasesIsNotReadyToComplete() {
         val mission = Mission(title = "Sem fases", rewardPersonId = "joao", rewardAmount = 10)
 
@@ -194,6 +217,21 @@ class DomainServicesTest {
     fun transactionRequiresPositiveAmountAndReason() {
         expectIllegalArgument { balances.validate(0.0, "ok") }
         expectIllegalArgument { balances.validate(1.0, "") }
+    }
+
+    @Test
+    fun punishmentSessionUsesEndTimeToCalculateRemainingTime() {
+        val session = PunishmentSession(
+            personId = "joao",
+            startedAtMillis = 1_000L,
+            endsAtMillis = 61_000L
+        )
+
+        assertEquals(30_000L, session.remainingMillis(31_000L))
+        assertTrue(session.isRunning(31_000L))
+        assertEquals(0L, session.remainingMillis(70_000L))
+        assertFalse(session.isRunning(70_000L))
+        assertEquals(69_000L, session.elapsedMillis(70_000L))
     }
 
     private fun expectIllegalArgument(block: () -> Unit) {

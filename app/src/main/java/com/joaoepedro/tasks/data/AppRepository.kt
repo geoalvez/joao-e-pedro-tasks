@@ -81,6 +81,16 @@ class AppRepository(context: Context) {
                     .put("createdAt", tx.createdAt.toString())
                     .put("reversed", tx.reversed)
             }))
+            .put("punishments", JSONArray(state.punishments.map { punishment ->
+                JSONObject()
+                    .put("id", punishment.id)
+                    .put("personId", punishment.personId)
+                    .put("startedAtMillis", punishment.startedAtMillis)
+                    .put("endsAtMillis", punishment.endsAtMillis)
+                    .put("active", punishment.active)
+                    .put("completedAlerted", punishment.completedAlerted)
+                    .put("finishedAtMillis", punishment.finishedAtMillis)
+            }))
             .put("dailyAllowance", JSONObject()
                 .put("amountPerDay", state.dailyAllowance.amountPerDay)
                 .put("enabledSince", state.dailyAllowance.enabledSince?.toString())
@@ -161,6 +171,17 @@ class AppRepository(context: Context) {
                 reversed = item.optBoolean("reversed", false)
             )
         }
+        val punishments = root.optJSONArray("punishments").toList { item ->
+            PunishmentSession(
+                id = item.getString("id"),
+                personId = item.getString("personId"),
+                startedAtMillis = item.optLong("startedAtMillis", System.currentTimeMillis()),
+                endsAtMillis = item.optLong("endsAtMillis", System.currentTimeMillis()),
+                active = item.optBoolean("active", true),
+                completedAlerted = item.optBoolean("completedAlerted", false),
+                finishedAtMillis = item.optLongOrNull("finishedAtMillis")
+            )
+        }
         val dailyAllowanceJson = root.optJSONObject("dailyAllowance")
         val dailyAllowance = if (dailyAllowanceJson != null) {
             DailyAllowanceConfig(
@@ -176,7 +197,7 @@ class AppRepository(context: Context) {
         val pointValueCents = root.optInt("pointValueCents", 33)
         val language = root.optString("language", "pt").takeIf { it.isNotBlank() } ?: "pt"
         val biometricEnabled = root.optBoolean("biometricEnabled", false)
-        return AppState(people = people, tasks = tasks, missions = missions, transactions = transactions, dailyAllowance = dailyAllowance, pointValueCents = pointValueCents, language = language, biometricEnabled = biometricEnabled)
+        return AppState(people = people, tasks = tasks, missions = missions, transactions = transactions, punishments = punishments, dailyAllowance = dailyAllowance, pointValueCents = pointValueCents, language = language, biometricEnabled = biometricEnabled)
     }
 }
 
@@ -188,4 +209,9 @@ private fun <T> JSONArray?.toList(mapper: (JSONObject) -> T): List<T> {
 private fun JSONArray?.strings(): List<String> {
     if (this == null) return emptyList()
     return (0 until length()).map { index -> getString(index) }
+}
+
+private fun JSONObject.optLongOrNull(name: String): Long? {
+    if (!has(name) || isNull(name)) return null
+    return optLong(name)
 }

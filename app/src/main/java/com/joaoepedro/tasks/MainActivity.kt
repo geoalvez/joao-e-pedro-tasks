@@ -1,7 +1,10 @@
 package com.joaoepedro.tasks
 
 import android.app.Activity
+import android.app.AlarmManager
 import android.app.AlertDialog
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -21,6 +24,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.GridLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -29,6 +33,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
+import java.time.Instant
 import com.joaoepedro.tasks.data.ActivityTask
 import com.joaoepedro.tasks.data.AppRepository
 import com.joaoepedro.tasks.data.AppState
@@ -36,6 +41,7 @@ import com.joaoepedro.tasks.data.Mission
 import com.joaoepedro.tasks.data.MissionPhase
 import com.joaoepedro.tasks.data.Periodicity
 import com.joaoepedro.tasks.data.Person
+import com.joaoepedro.tasks.data.PunishmentSession
 import com.joaoepedro.tasks.data.RewardTransaction
 import com.joaoepedro.tasks.data.TransactionType
 import com.joaoepedro.tasks.domain.DailyAllowanceService
@@ -43,6 +49,7 @@ import com.joaoepedro.tasks.domain.RewardBalanceService
 import com.joaoepedro.tasks.domain.TaskRotationService
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneId
 
 class MainActivity : Activity() {
     private lateinit var repository: AppRepository
@@ -53,6 +60,16 @@ class MainActivity : Activity() {
     private var selectedTab = Tab.Today
     private var pendingPhotoPersonId: String? = null
     private var pendingCameraFile: File? = null
+    private var dashboardStartDate: LocalDate = LocalDate.now()
+    private var dashboardEndDate: LocalDate = LocalDate.now()
+    private val punishmentTicker = Handler(Looper.getMainLooper())
+    private val punishmentTick = object : Runnable {
+        override fun run() {
+            processPunishmentExpirations()
+            if (::root.isInitialized && selectedTab == Tab.Punishments) render()
+            punishmentTicker.postDelayed(this, 1000)
+        }
+    }
 
     private val strings get() = AppStrings.get(state.language)
 
@@ -66,6 +83,11 @@ class MainActivity : Activity() {
         state = repository.load()
         showSplash()
         Handler(Looper.getMainLooper()).postDelayed({ startRenderApp() }, 1200)
+    }
+
+    override fun onDestroy() {
+        punishmentTicker.removeCallbacksAndMessages(null)
+        super.onDestroy()
     }
 
     @Deprecated("Deprecated Android callback kept to avoid extra dependencies.")
@@ -144,10 +166,14 @@ class MainActivity : Activity() {
         if (state.biometricEnabled) {
             showBiometricPrompt {
                 processDailyAllowances()
+                scheduleRunningPunishmentAlarms()
+                startPunishmentTicker()
                 render()
             }
         } else {
             processDailyAllowances()
+            scheduleRunningPunishmentAlarms()
+            startPunishmentTicker()
             render()
         }
     }
@@ -195,6 +221,8 @@ class MainActivity : Activity() {
             Tab.People -> renderPeople(content)
             Tab.Tasks -> renderTasks(content)
             Tab.Missions -> renderMissions(content)
+            Tab.Punishments -> renderPunishments(content)
+            Tab.Dashboards -> renderDashboards(content)
             Tab.Rewards -> renderRewards(content)
             Tab.Data -> renderData(content)
         }
@@ -222,6 +250,8 @@ class MainActivity : Activity() {
             Tab.People   to (R.drawable.ic_nav_family   to strings.tabFamily),
             Tab.Tasks    to (R.drawable.ic_nav_tasks    to strings.tabTasks),
             Tab.Missions to (R.drawable.ic_nav_missions to strings.tabMissions),
+            Tab.Punishments to (R.drawable.ic_nav_punishment to "Castigo"),
+            Tab.Dashboards to (R.drawable.ic_nav_dashboard to "Dash"),
             Tab.Rewards  to (R.drawable.ic_nav_rewards  to strings.tabBalance),
             Tab.Data     to (R.drawable.ic_nav_config   to strings.tabConfig)
         )
@@ -440,6 +470,442 @@ class MainActivity : Activity() {
             }
             missionCard.setOnClickListener { showMissionProgressDialog(mission.id) }
             content.addView(missionCard)
+        }
+    }
+
+    private fun renderPunishments(content: LinearLayout) {
+        content.addView(rowTitle("Castigos") { showPunishmentDialog() })
+        val people = state.people.filterNot { it.archived }
+        if (people.isEmpty()) {
+            content.addView(empty(strings.noPeople))
+            return
+        }
+        people.forEach { person ->
+            val session = activePunishmentFor(person.id)
+            val punishmentCard = card {
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(text(person.name, 20, true), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(text(if (session == null) "Livre" else "Em castigo", 13, true).apply {
+                        setTextColor(if (session == null) COLOR_GREEN else COLOR_CORAL)
+                        gravity = Gravity.CENTER
+                        background = roundedDrawable(if (session == null) COLOR_BLUE_SOFT else COLOR_CORAL_SOFT, 18f)
+                        setPadding(dp(12), dp(5), dp(12), dp(5))
+                    })
+                })
+                if (session == null) {
+                    addView(text("Nenhum castigo ativo no momento.", 14, false).apply {
+                        setTextColor(COLOR_MUTED)
+                        setPadding(0, dp(8), 0, 0)
+                    })
+                    addView(secondaryButton("Iniciar castigo") { showPunishmentDialog(person.id) })
+                } else {
+                    val remaining = session.remainingMillis()
+                    addView(text("Tempo restante", 13, true).apply {
+                        setTextColor(COLOR_MUTED)
+                        setPadding(0, dp(12), 0, 0)
+                    })
+                    addView(text(formatDuration(remaining), 36, true).apply {
+                        setTextColor(COLOR_ORANGE_PRI)
+                        setPadding(0, dp(2), 0, 0)
+                    })
+                    addView(text("Pode adicionar tempo sem parar o cronometro.", 13, false).apply {
+                        setTextColor(COLOR_MUTED)
+                        setPadding(0, dp(2), 0, 0)
+                    })
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        addView(secondaryButton("+1 min") { addPunishmentTime(session.id, 60_000L) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(0, dp(14), dp(6), 0) })
+                        addView(secondaryButton("+5 min") { addPunishmentTime(session.id, 5 * 60_000L) }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(dp(6), dp(14), 0, 0) })
+                    })
+                    addView(secondaryButton("Adicionar outro tempo") { showAddPunishmentTimeDialog(session) })
+                    addView(secondaryButton("Encerrar castigo") { stopPunishment(session.id) })
+                }
+            }
+            content.addView(punishmentCard)
+        }
+    }
+
+    private fun showPunishmentDialog(defaultPersonId: String? = null) {
+        val people = state.people.filterNot { it.archived }
+        if (people.isEmpty()) { toast(strings.toastInformName); return }
+        val layout = friendlyDialogLayout("Novo castigo", "Defina quem vai ficar refletindo e por quanto tempo.")
+        val personSpinner = spinner(people.map { it.name })
+        defaultPersonId?.let { id ->
+            val index = people.indexOfFirst { it.id == id }
+            if (index >= 0) personSpinner.setSelection(index)
+        }
+        val hoursInput = edit("Horas", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val minutesInput = edit("Minutos", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val secondsInput = edit("Segundos", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val errorText = text("", 13, true).apply {
+            setTextColor(COLOR_CORAL)
+            visibility = View.GONE
+            setPadding(0, dp(8), 0, 0)
+        }
+        fun showErr(message: String) {
+            errorText.text = message
+            errorText.visibility = View.VISIBLE
+        }
+        layout.addView(label(strings.labelPerson))
+        layout.addView(personSpinner)
+        layout.addView(label("Tempo"))
+        layout.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(hoursInput, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+            addView(minutesInput, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+            addView(secondsInput, LinearLayout.LayoutParams(0, -2, 1f))
+        })
+        layout.addView(errorText)
+        val dialog = AlertDialog.Builder(this)
+            .setView(ScrollView(this).apply { addView(layout) })
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton("Iniciar", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val duration = readDurationMillis(hoursInput, minutesInput, secondsInput)
+                if (duration <= 0L) {
+                    showErr("Informe um tempo maior que zero.")
+                    return@setOnClickListener
+                }
+                val person = people[personSpinner.selectedItemPosition]
+                val active = activePunishmentFor(person.id)
+                if (active != null) {
+                    addPunishmentTime(active.id, duration)
+                } else {
+                    startPunishment(person.id, duration)
+                }
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun showAddPunishmentTimeDialog(session: PunishmentSession) {
+        val person = state.people.firstOrNull { it.id == session.personId }
+        val layout = friendlyDialogLayout("Adicionar tempo", person?.name ?: "Castigo ativo")
+        val hoursInput = edit("Horas", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val minutesInput = edit("Minutos", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val secondsInput = edit("Segundos", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val errorText = text("", 13, true).apply { setTextColor(COLOR_CORAL); visibility = View.GONE; setPadding(0, dp(8), 0, 0) }
+        layout.addView(label("Tempo extra"))
+        layout.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(hoursInput, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+            addView(minutesInput, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+            addView(secondsInput, LinearLayout.LayoutParams(0, -2, 1f))
+        })
+        layout.addView(errorText)
+        val dialog = AlertDialog.Builder(this)
+            .setView(ScrollView(this).apply { addView(layout) })
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton("Adicionar", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val duration = readDurationMillis(hoursInput, minutesInput, secondsInput)
+                if (duration <= 0L) {
+                    errorText.text = "Informe um tempo maior que zero."
+                    errorText.visibility = View.VISIBLE
+                    return@setOnClickListener
+                }
+                addPunishmentTime(session.id, duration)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun readDurationMillis(hoursInput: EditText, minutesInput: EditText, secondsInput: EditText): Long {
+        val hours = hoursInput.text.toString().trim().toLongOrNull() ?: 0L
+        val minutes = minutesInput.text.toString().trim().toLongOrNull() ?: 0L
+        val seconds = secondsInput.text.toString().trim().toLongOrNull() ?: 0L
+        return ((hours * 60L * 60L) + (minutes * 60L) + seconds) * 1000L
+    }
+
+    private fun startPunishment(personId: String, durationMillis: Long) {
+        requestPunishmentNotificationPermissionIfNeeded()
+        val now = System.currentTimeMillis()
+        val session = PunishmentSession(personId = personId, startedAtMillis = now, endsAtMillis = now + durationMillis)
+        state = state.copy(punishments = state.punishments + session)
+        repository.save(state)
+        schedulePunishmentAlarm(session)
+        render()
+    }
+
+    private fun addPunishmentTime(sessionId: String, durationMillis: Long) {
+        var updatedSession: PunishmentSession? = null
+        val updated = state.punishments.map { session ->
+            if (session.id == sessionId) {
+                val base = maxOf(session.endsAtMillis, System.currentTimeMillis())
+                session.copy(endsAtMillis = base + durationMillis, active = true, completedAlerted = false, finishedAtMillis = null).also { updatedSession = it }
+            } else {
+                session
+            }
+        }
+        state = state.copy(punishments = updated)
+        repository.save(state)
+        updatedSession?.let { schedulePunishmentAlarm(it) }
+        render()
+    }
+
+    private fun stopPunishment(sessionId: String) {
+        val updated = state.punishments.map { session ->
+            if (session.id == sessionId) session.copy(active = false, completedAlerted = true, finishedAtMillis = System.currentTimeMillis()) else session
+        }
+        state = state.copy(punishments = updated)
+        repository.save(state)
+        cancelPunishmentAlarm(sessionId)
+        render()
+    }
+
+    private fun activePunishmentFor(personId: String): PunishmentSession? {
+        return state.punishments
+            .filter { it.personId == personId && it.isRunning() }
+            .maxByOrNull { it.endsAtMillis }
+    }
+
+    private fun processPunishmentExpirations() {
+        val finished = state.punishments.filter { it.active && it.remainingMillis() == 0L && !it.completedAlerted }
+        if (finished.isEmpty()) return
+        state = state.copy(punishments = state.punishments.map { session ->
+            if (finished.any { it.id == session.id }) session.copy(active = false, completedAlerted = true, finishedAtMillis = session.endsAtMillis) else session
+        })
+        repository.save(state)
+        finished.forEach { session ->
+            val personName = state.people.firstOrNull { it.id == session.personId }?.name ?: "Participante"
+            showPunishmentFinishedDialog(personName)
+        }
+    }
+
+    private fun showPunishmentFinishedDialog(personName: String) {
+        PunishmentAlarmReceiver.playAlertSound(this)
+        AlertDialog.Builder(this)
+            .setTitle("Castigo finalizado")
+            .setMessage("$personName terminou o tempo de castigo.")
+            .setPositiveButton(strings.btnClose, null)
+            .show()
+    }
+
+    private fun startPunishmentTicker() {
+        punishmentTicker.removeCallbacks(punishmentTick)
+        punishmentTicker.post(punishmentTick)
+    }
+
+    private fun scheduleRunningPunishmentAlarms() {
+        state.punishments.filter { it.isRunning() }.forEach { schedulePunishmentAlarm(it) }
+    }
+
+    private fun schedulePunishmentAlarm(session: PunishmentSession) {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pendingIntent = punishmentPendingIntent(session.id, PendingIntent.FLAG_UPDATE_CURRENT) ?: return
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, session.endsAtMillis, pendingIntent)
+        } else {
+            alarmManager.set(AlarmManager.RTC_WAKEUP, session.endsAtMillis, pendingIntent)
+        }
+    }
+
+    private fun cancelPunishmentAlarm(sessionId: String) {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        punishmentPendingIntent(sessionId, PendingIntent.FLAG_NO_CREATE)?.let { alarmManager.cancel(it) }
+    }
+
+    private fun punishmentPendingIntent(sessionId: String, updateFlag: Int): PendingIntent? {
+        val intent = Intent(this, PunishmentAlarmReceiver::class.java)
+            .putExtra(PunishmentAlarmReceiver.EXTRA_PUNISHMENT_ID, sessionId)
+        val flags = updateFlag or (
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        )
+        return PendingIntent.getBroadcast(this, sessionId.hashCode(), intent, flags)
+    }
+
+    private fun requestPunishmentNotificationPermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST)
+        }
+    }
+
+    private fun formatDuration(millis: Long): String {
+        val totalSeconds = (millis / 1000L).coerceAtLeast(0L)
+        val hours = totalSeconds / 3600L
+        val minutes = (totalSeconds % 3600L) / 60L
+        val seconds = totalSeconds % 60L
+        return if (hours > 0) {
+            String.format(java.util.Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
+        }
+    }
+
+    private fun renderDashboards(content: LinearLayout) {
+        content.addView(sectionTitle("Dashboards"))
+        content.addView(dashboardFilterCard())
+        content.addView(card {
+            addView(text("Pessoa x castigo", 20, true))
+            addView(text("Quantidade de castigos e tempo acumulado no periodo selecionado.", 13, false).apply {
+                setTextColor(COLOR_MUTED)
+                setPadding(0, dp(3), 0, dp(12))
+            })
+            val sessionsInRange = state.punishments.filter { isInDashboardRange(punishmentDate(it.startedAtMillis)) }
+            if (sessionsInRange.isEmpty()) {
+                addView(empty("Nenhum castigo registrado nesse periodo.").apply {
+                    setPadding(0, dp(8), 0, dp(8))
+                })
+            } else {
+                state.people.filterNot { it.archived }.forEach { person ->
+                    val personSessions = sessionsInRange.filter { it.personId == person.id }
+                    if (personSessions.isNotEmpty()) addView(punishmentReportRow(person, personSessions))
+                }
+            }
+        })
+    }
+
+    private fun dashboardFilterCard(): View = card {
+        addView(text("Periodo", 18, true))
+        addView(text("${formatDate(dashboardStartDate)} ate ${formatDate(dashboardEndDate)}", 14, true).apply {
+            setTextColor(COLOR_BLUE)
+            setPadding(0, dp(2), 0, dp(10))
+        })
+        addView(HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(periodButton("1 dia") { setDashboardPeriod(days = 1) })
+                addView(periodButton("1 semana") { setDashboardPeriod(days = 7) })
+                addView(periodButton("1 mes") { setDashboardPeriod(months = 1) })
+                addView(periodButton("1 ano") { setDashboardPeriod(years = 1) })
+            })
+        }, LinearLayout.LayoutParams(-1, dp(46)))
+        addView(secondaryButton("Escolher intervalo") { showDashboardDateRangeDialog() })
+    }
+
+    private fun periodButton(label: String, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = label
+            gravity = Gravity.CENTER
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_ORANGE_PRI)
+            background = roundedDrawable(COLOR_ORANGE_SOFT, 22f, 1, COLOR_ORANGE_PRI)
+            setPadding(dp(14), 0, dp(14), 0)
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(-2, dp(38)).apply { setMargins(0, 0, dp(8), 0) }
+        }
+    }
+
+    private fun punishmentReportRow(person: Person, sessions: List<PunishmentSession>): View {
+        val totalMillis = sessions.sumOf { it.elapsedMillis() }
+        val activeCount = sessions.count { it.isRunning() }
+        val averageMillis = if (sessions.isEmpty()) 0L else totalMillis / sessions.size
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedDrawable(Color.WHITE, 16f, 1, COLOR_BORDER)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(text(person.name, 17, true), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(text("${sessions.size}x", 18, true).apply { setTextColor(COLOR_CORAL) })
+            })
+            addView(text("Tempo total: ${formatLongDuration(totalMillis)}", 14, true).apply {
+                setTextColor(COLOR_ORANGE_PRI)
+                setPadding(0, dp(6), 0, 0)
+            })
+            addView(text("Media por castigo: ${formatLongDuration(averageMillis)}", 13, false).apply {
+                setTextColor(COLOR_MUTED)
+                setPadding(0, dp(2), 0, 0)
+            })
+            if (activeCount > 0) {
+                addView(text("Em andamento no periodo: $activeCount", 13, true).apply {
+                    setTextColor(COLOR_BLUE)
+                    setPadding(0, dp(4), 0, 0)
+                })
+            }
+        }.withMargins(bottom = 10)
+    }
+
+    private fun setDashboardPeriod(days: Long = 0L, months: Long = 0L, years: Long = 0L) {
+        val end = LocalDate.now()
+        dashboardEndDate = end
+        dashboardStartDate = when {
+            years > 0L -> end.minusYears(years).plusDays(1)
+            months > 0L -> end.minusMonths(months).plusDays(1)
+            else -> end.minusDays((days - 1).coerceAtLeast(0L))
+        }
+        render()
+    }
+
+    private fun showDashboardDateRangeDialog() {
+        val layout = friendlyDialogLayout("Intervalo do dashboard", "Defina a data inicio e data fim dos relatorios.")
+        val startInput = edit("dd/mm/aaaa", formatDate(dashboardStartDate)).also { applyDateMask(it) }
+        val endInput = edit("dd/mm/aaaa", formatDate(dashboardEndDate)).also { applyDateMask(it) }
+        val errorText = text("", 13, true).apply { setTextColor(COLOR_CORAL); visibility = View.GONE; setPadding(0, dp(8), 0, 0) }
+        layout.addView(label("Data inicio"))
+        layout.addView(startInput)
+        layout.addView(label("Data fim"))
+        layout.addView(endInput)
+        layout.addView(errorText)
+        val dialog = AlertDialog.Builder(this)
+            .setView(ScrollView(this).apply { addView(layout) })
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val start = parseDate(startInput.text.toString().trim())
+                val end = parseDate(endInput.text.toString().trim())
+                when {
+                    start == null || end == null -> {
+                        errorText.text = "Informe as datas no formato dd/mm/aaaa."
+                        errorText.visibility = View.VISIBLE
+                    }
+                    start.isAfter(end) -> {
+                        errorText.text = "A data inicio nao pode ser maior que a data fim."
+                        errorText.visibility = View.VISIBLE
+                    }
+                    else -> {
+                        dashboardStartDate = start
+                        dashboardEndDate = end
+                        dialog.dismiss()
+                        render()
+                    }
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun punishmentDate(millis: Long): LocalDate {
+        return Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate()
+    }
+
+    private fun isInDashboardRange(date: LocalDate): Boolean {
+        return !date.isBefore(dashboardStartDate) && !date.isAfter(dashboardEndDate)
+    }
+
+    private fun parseDate(text: String): LocalDate? {
+        if (text.isBlank()) return null
+        return runCatching { LocalDate.parse(text, java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) }.getOrNull()
+    }
+
+    private fun formatDate(date: LocalDate): String {
+        return date.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    }
+
+    private fun formatLongDuration(millis: Long): String {
+        val totalSeconds = (millis / 1000L).coerceAtLeast(0L)
+        val hours = totalSeconds / 3600L
+        val minutes = (totalSeconds % 3600L) / 60L
+        val seconds = totalSeconds % 60L
+        return when {
+            hours > 0L -> "${hours}h ${minutes}min ${seconds}s"
+            minutes > 0L -> "${minutes}min ${seconds}s"
+            else -> "${seconds}s"
         }
     }
 
@@ -1271,14 +1737,14 @@ class MainActivity : Activity() {
                     }
                 }
                 val updatedMission = mission.copy(phases = updatedPhases)
-                if (updatedMission.isReadyToCompleteFor(personId)) {
+                if (updatedMission.shouldCreditRewardFor(personId)) {
                     rewardTransaction = RewardTransaction(
                         personId = personId,
                         type = TransactionType.DEPOSIT,
                         amount = mission.rewardAmount.toDouble(),
                         reason = "Missao concluida: ${mission.title}"
                     )
-                    updatedMission.copy(rewardPaidParticipantIds = (updatedMission.rewardPaidParticipantIds + personId).distinct())
+                    updatedMission.markRewardPaidFor(personId)
                 } else {
                     updatedMission
                 }
@@ -1288,13 +1754,24 @@ class MainActivity : Activity() {
         }
         val transactions = rewardTransaction?.let { state.transactions + it } ?: state.transactions
         persist(state.copy(missions = updatedMissions, transactions = transactions))
-        if (rewardTransaction != null) toast(strings.toastRewardCredited)
+        rewardTransaction?.let {
+            val personName = state.people.firstOrNull { person -> person.id == personId }?.name ?: strings.noPersonAssigned
+            showMissionRewardDialog(personName, it.amount)
+        }
+    }
+
+    private fun showMissionRewardDialog(personName: String, points: Double) {
+        AlertDialog.Builder(this)
+            .setTitle(strings.statusCompleted)
+            .setMessage("$personName completou a missao. Sera adicionado ${points.formatPoints()} pontos a sua carteira.")
+            .setPositiveButton(strings.btnClose, null)
+            .show()
     }
 
     private fun completeMission(missionId: String) {
         val mission = state.missions.firstOrNull { it.id == missionId } ?: return
         val unpaidReadyParticipantIds = mission.participantIds
-            .filter { it !in mission.rewardPaidParticipantIds && mission.isReadyToCompleteFor(it) }
+            .filter { mission.shouldCreditRewardFor(it) }
         if (unpaidReadyParticipantIds.isEmpty()) { toast(strings.toastAllPhases); return }
         val recipientIds = mission.participantIds.ifEmpty { listOf(mission.rewardPersonId).filter { it.isNotBlank() } }
         if (recipientIds.isEmpty()) { toast(strings.toastNoParticipants); return }
@@ -1485,7 +1962,7 @@ class MainActivity : Activity() {
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private enum class Tab { Today, People, Tasks, Missions, Rewards, Data }
+    private enum class Tab { Today, People, Tasks, Missions, Punishments, Dashboards, Rewards, Data }
     private fun calcAge(birthDate: LocalDate): Int = java.time.Period.between(birthDate, LocalDate.now()).years
 
     private companion object {
@@ -1494,6 +1971,7 @@ class MainActivity : Activity() {
         const val PHOTO_REQUEST            = 1103
         const val CAMERA_REQUEST           = 1104
         const val CAMERA_PERMISSION_REQUEST = 1105
+        const val NOTIFICATION_PERMISSION_REQUEST = 1106
         val COLOR_PAGE         = Color.rgb(255, 255, 255)
         val COLOR_INK          = Color.rgb(38, 50, 56)
         val COLOR_MUTED        = Color.rgb(130, 130, 140)

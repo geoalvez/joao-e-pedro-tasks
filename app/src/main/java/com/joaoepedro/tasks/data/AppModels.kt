@@ -59,6 +59,10 @@ data class Mission(
     fun isReadyToCompleteFor(personId: String): Boolean =
         phases.isNotEmpty() && phases.all { personId in it.checkedParticipantIds }
     fun completedPhaseCountFor(personId: String): Int = phases.count { personId in it.checkedParticipantIds }
+    fun shouldCreditRewardFor(personId: String): Boolean =
+        isReadyToCompleteFor(personId) && personId !in rewardPaidParticipantIds
+    fun markRewardPaidFor(personId: String): Mission =
+        copy(rewardPaidParticipantIds = (rewardPaidParticipantIds + personId).distinct())
     fun isCompleted(): Boolean = participantIds.isNotEmpty() &&
         participantIds.all { it in rewardPaidParticipantIds }
 }
@@ -79,11 +83,33 @@ data class DailyAllowanceConfig(
     val lastProcessedDate: LocalDate? = null
 )
 
+data class PunishmentSession(
+    val id: String = UUID.randomUUID().toString(),
+    val personId: String,
+    val startedAtMillis: Long = System.currentTimeMillis(),
+    val endsAtMillis: Long,
+    val active: Boolean = true,
+    val completedAlerted: Boolean = false,
+    val finishedAtMillis: Long? = null
+) {
+    fun remainingMillis(nowMillis: Long = System.currentTimeMillis()): Long =
+        (endsAtMillis - nowMillis).coerceAtLeast(0)
+
+    fun isRunning(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        active && remainingMillis(nowMillis) > 0
+
+    fun elapsedMillis(nowMillis: Long = System.currentTimeMillis()): Long {
+        val finish = finishedAtMillis ?: if (active) nowMillis else endsAtMillis
+        return (finish - startedAtMillis).coerceAtLeast(0)
+    }
+}
+
 data class AppState(
     val people: List<Person> = emptyList(),
     val tasks: List<ActivityTask> = emptyList(),
     val missions: List<Mission> = emptyList(),
     val transactions: List<RewardTransaction> = emptyList(),
+    val punishments: List<PunishmentSession> = emptyList(),
     val dailyAllowance: DailyAllowanceConfig = DailyAllowanceConfig(),
     val pointValueCents: Int = 33,
     val language: String = "pt",

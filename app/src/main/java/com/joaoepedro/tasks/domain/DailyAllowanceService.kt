@@ -28,7 +28,7 @@ object DailyAllowanceService {
                         RewardTransaction(
                             personId = person.id,
                             type = TransactionType.DAILY_ALLOWANCE,
-                            amount = config.amountPerDay,
+                            amount = config.amountPerDay.toDouble(),
                             reason = "Mesada diária",
                             createdAt = date
                         )

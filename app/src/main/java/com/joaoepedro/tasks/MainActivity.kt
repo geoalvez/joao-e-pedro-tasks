@@ -340,7 +340,7 @@ class MainActivity : Activity() {
                             setPadding(0, dp(2), 0, 0)
                         })
                     }
-                    addView(text("⭐ $balance pts", 15, false).apply {
+                    addView(text("⭐ ${balance.formatPoints()} pts", 15, false).apply {
                         gravity = Gravity.CENTER
                         setTextColor(COLOR_ORANGE_PRI)
                         typeface = Typeface.DEFAULT_BOLD
@@ -453,7 +453,7 @@ class MainActivity : Activity() {
             val balance = balances.balanceFor(person.id, state.transactions)
             val rewardCard = card {
                 addView(text(person.name, 18, true))
-                addView(text("Saldo: $balance pontos", 22, true).apply { setTextColor(COLOR_ACCENT) })
+                addView(text("Saldo: ${balance.formatPoints()} pontos", 22, true).apply { setTextColor(COLOR_ACCENT) })
                 addView(text(formatReais(balance, state.pointValueCents), 15, true).apply {
                     setTextColor(COLOR_GREEN)
                     setPadding(0, dp(2), 0, dp(4))
@@ -481,7 +481,7 @@ class MainActivity : Activity() {
         val config = state.dailyAllowance
         content.addView(card {
             addView(text("Valor do ponto", 18, true))
-            addView(text("1 ponto = ${formatReais(1, state.pointValueCents)}", 14, false).apply { setTextColor(COLOR_MUTED) })
+            addView(text("1 ponto = ${formatReais(1.0, state.pointValueCents)}", 14, false).apply { setTextColor(COLOR_MUTED) })
             addView(secondaryButton("Configurar") { showPointValueDialog() })
         })
         content.addView(card {
@@ -542,7 +542,7 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun formatReais(points: Int, pointValueCents: Int): String {
+    private fun formatReais(points: Double, pointValueCents: Int): String {
         val total = points * pointValueCents / 100.0
         return String.format(java.util.Locale("pt", "BR"), "R$ %.2f", total)
     }
@@ -1183,15 +1183,51 @@ class MainActivity : Activity() {
             toast("Cadastre uma pessoa primeiro.")
             return
         }
+        var inputInReais = false
         val layout = dialogLayout()
         val personSpinner = spinner(people.map { it.name })
         val typeSpinner = spinner(TransactionType.entries.map { it.label })
-        val amountInput = edit("Quantidade de pontos", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val amountInput = edit("Quantidade de pontos", "").apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
         val reasonInput = when (defaultType) {
             TransactionType.PENALTY -> edit("Ex: Brigou com o irmão...", "")
             TransactionType.WITHDRAW -> edit("Ex: Comprou um brinquedo...", "")
             TransactionType.DEPOSIT -> edit("Ex: Ajudou em casa, terminou tarefa...", "")
             TransactionType.DAILY_ALLOWANCE -> edit("Ex: Mesada diária", "")
+        }
+        val ptBtn = TextView(this).apply {
+            text = "Pontos"
+            gravity = Gravity.CENTER
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f)
+        }
+        val brlBtn = TextView(this).apply {
+            text = "Reais (R$)"
+            gravity = Gravity.CENTER
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f)
+        }
+        fun refreshToggle() {
+            ptBtn.background = roundedDrawable(if (!inputInReais) COLOR_ORANGE_PRI else COLOR_ORANGE_SOFT, 20f)
+            ptBtn.setTextColor(if (!inputInReais) Color.WHITE else COLOR_ORANGE_PRI)
+            brlBtn.background = roundedDrawable(if (inputInReais) COLOR_ORANGE_PRI else COLOR_ORANGE_SOFT, 20f)
+            brlBtn.setTextColor(if (inputInReais) Color.WHITE else COLOR_ORANGE_PRI)
+            amountInput.hint = if (inputInReais) "Valor em reais (ex: 1.50)" else "Quantidade de pontos"
+        }
+        ptBtn.setOnClickListener { inputInReais = false; refreshToggle() }
+        brlBtn.setOnClickListener { inputInReais = true; refreshToggle() }
+        refreshToggle()
+        val toggleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ptBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
+            addView(brlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
+            layoutParams = LinearLayout.LayoutParams(-1, dp(40)).apply {
+                topMargin = dp(6)
+                bottomMargin = dp(6)
+            }
         }
         defaultPersonId?.let { id ->
             val personIndex = people.indexOfFirst { it.id == id }
@@ -1202,6 +1238,8 @@ class MainActivity : Activity() {
         layout.addView(personSpinner)
         layout.addView(label("Tipo"))
         layout.addView(typeSpinner)
+        layout.addView(label("Unidade"))
+        layout.addView(toggleRow)
         layout.addView(amountInput)
         layout.addView(reasonInput)
         AlertDialog.Builder(this)
@@ -1209,10 +1247,16 @@ class MainActivity : Activity() {
             .setView(layout)
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Salvar") { _, _ ->
-                val amount = amountInput.text.toString().toIntOrNull() ?: 0
+                val rawValue = amountInput.text.toString().replace(',', '.').toDoubleOrNull() ?: 0.0
+                val amountInPoints = if (inputInReais) {
+                    val pointRate = state.pointValueCents / 100.0
+                    Math.round(rawValue / pointRate * 100) / 100.0
+                } else {
+                    rawValue
+                }
                 val reason = reasonInput.text.toString().trim()
                 try {
-                    balances.validate(amount, reason)
+                    balances.validate(amountInPoints, reason)
                 } catch (error: IllegalArgumentException) {
                     toast(error.message ?: "Dados invalidos.")
                     return@setPositiveButton
@@ -1220,7 +1264,7 @@ class MainActivity : Activity() {
                 val tx = RewardTransaction(
                     personId = people[personSpinner.selectedItemPosition].id,
                     type = TransactionType.entries[typeSpinner.selectedItemPosition],
-                    amount = amount,
+                    amount = amountInPoints,
                     reason = reason
                 )
                 persist(state.copy(transactions = state.transactions + tx))
@@ -1276,7 +1320,7 @@ class MainActivity : Activity() {
             addView(text("Saldo atual", 13, true).apply {
                 setTextColor(COLOR_MUTED)
             })
-            addView(text("$balance pontos", 28, true).apply {
+            addView(text("${balance.formatPoints()} pontos", 28, true).apply {
                 setTextColor(if (balance >= 0) COLOR_GREEN else COLOR_RED)
             })
         }, LinearLayout.LayoutParams(-1, -2).apply {
@@ -1316,9 +1360,17 @@ class MainActivity : Activity() {
                                 setTextColor(COLOR_MUTED)
                             })
                         }, LinearLayout.LayoutParams(0, -2, 1f))
-                        addView(text("${signed.formatSigned()} pts", 16, true).apply {
-                            gravity = Gravity.CENTER
-                            setTextColor(if (isReversedPenalty) COLOR_MUTED else if (signed >= 0) COLOR_GREEN else COLOR_RED)
+                        addView(LinearLayout(context).apply {
+                            orientation = LinearLayout.VERTICAL
+                            gravity = Gravity.CENTER or Gravity.END
+                            addView(text("${signed.formatSigned()} pts", 16, true).apply {
+                                gravity = Gravity.END
+                                setTextColor(if (isReversedPenalty) COLOR_MUTED else if (signed >= 0) COLOR_GREEN else COLOR_RED)
+                            })
+                            addView(text(formatReais(signed, state.pointValueCents), 11, false).apply {
+                                gravity = Gravity.END
+                                setTextColor(COLOR_MUTED)
+                            })
                         })
                     })
                     if (tx.type == TransactionType.PENALTY && !tx.reversed) {
@@ -1409,7 +1461,7 @@ class MainActivity : Activity() {
             RewardTransaction(
                 personId = personId,
                 type = TransactionType.DEPOSIT,
-                amount = mission.rewardAmount,
+                amount = mission.rewardAmount.toDouble(),
                 reason = "Missao concluida: ${mission.title}"
             )
         }
@@ -1643,7 +1695,15 @@ class MainActivity : Activity() {
         return this
     }
 
-    private fun Int.formatSigned(): String = if (this > 0) "+$this" else toString()
+    private fun Double.formatPoints(): String {
+        val s = String.format(java.util.Locale.US, "%.2f", this)
+        return s.trimEnd('0').trimEnd('.')
+    }
+
+    private fun Double.formatSigned(): String {
+        val f = formatPoints()
+        return if (this > 0) "+$f" else f
+    }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 

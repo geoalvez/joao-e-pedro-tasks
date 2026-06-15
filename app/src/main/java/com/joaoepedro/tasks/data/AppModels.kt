@@ -60,7 +60,7 @@ data class RewardTransaction(
     val id: String = UUID.randomUUID().toString(),
     val personId: String,
     val type: TransactionType,
-    val amount: Int,
+    val amount: Double,
     val reason: String,
     val createdAt: LocalDate = LocalDate.now(),
     val reversed: Boolean = false

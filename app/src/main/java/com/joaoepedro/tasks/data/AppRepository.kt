@@ -74,7 +74,7 @@ class AppRepository(context: Context) {
                     .put("id", tx.id)
                     .put("personId", tx.personId)
                     .put("type", tx.type.name)
-                    .put("amount", tx.amount)
+                    .put("amount", tx.amount.toString())
                     .put("reason", tx.reason)
                     .put("createdAt", tx.createdAt.toString())
                     .put("reversed", tx.reversed)
@@ -138,7 +138,7 @@ class AppRepository(context: Context) {
                 id = item.getString("id"),
                 personId = item.getString("personId"),
                 type = TransactionType.valueOf(item.getString("type")),
-                amount = item.getInt("amount"),
+                amount = item.optString("amount", "0").toDoubleOrNull() ?: item.optDouble("amount", 0.0),
                 reason = item.getString("reason"),
                 createdAt = LocalDate.parse(item.getString("createdAt")),
                 reversed = item.optBoolean("reversed", false)

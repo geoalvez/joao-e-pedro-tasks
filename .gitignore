@@ -1,0 +1,11 @@
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+.agent/
+.agents/
+.claude/
+_bmad/
+_bmad-output/

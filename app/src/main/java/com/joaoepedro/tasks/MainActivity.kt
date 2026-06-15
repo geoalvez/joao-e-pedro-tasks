@@ -675,7 +675,7 @@ class MainActivity : Activity() {
     private fun showPersonDialog() {
         val layout = dialogLayout()
         val nameInput = edit(strings.hintChildName, "")
-        val birthInput = edit(strings.hintBirthDate, "")
+        val birthInput = edit("dd/mm/aaaa", "").also { applyDateMask(it) }
         val schoolInput = edit(strings.hintSchoolYear, "")
         layout.addView(label(strings.nameLabel))
         layout.addView(nameInput)
@@ -690,7 +690,9 @@ class MainActivity : Activity() {
             .setPositiveButton(strings.btnSave) { _, _ ->
                 val name = nameInput.text.toString().trim()
                 if (name.isBlank()) { toast(strings.toastInformName); return@setPositiveButton }
-                val birthDate = parseBirthDate(birthInput.text.toString().trim())
+                val rawBirth = birthInput.text.toString().trim()
+                val birthDate = parseBirthDate(rawBirth)
+                if (rawBirth.isNotBlank() && birthDate == null) { toast("Data inválida. Use dd/mm/aaaa."); return@setPositiveButton }
                 val schoolYear = schoolInput.text.toString().trim().takeIf { it.isNotBlank() }
                 persist(state.copy(people = state.people + Person(name = name, birthDate = birthDate, schoolYear = schoolYear)))
             }
@@ -700,7 +702,7 @@ class MainActivity : Activity() {
     private fun showPersonProfileDialog(person: Person) {
         val layout = dialogLayout()
         val nameInput = edit(strings.hintChildName, person.name)
-        val birthInput = edit(strings.hintBirthDate, person.birthDate?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "")
+        val birthInput = edit("dd/mm/aaaa", person.birthDate?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "").also { applyDateMask(it) }
         val schoolInput = edit(strings.hintSchoolYear, person.schoolYear ?: "")
         val photoStatus = TextView(this).apply {
             text = if (person.photoUri != null) strings.photoSet else strings.noPhotoSelected
@@ -731,7 +733,9 @@ class MainActivity : Activity() {
             .setPositiveButton(strings.btnSave) { _, _ ->
                 val name = nameInput.text.toString().trim()
                 if (name.isBlank()) { toast(strings.toastInformName); return@setPositiveButton }
-                val birthDate = parseBirthDate(birthInput.text.toString().trim())
+                val rawBirth = birthInput.text.toString().trim()
+                val birthDate = parseBirthDate(rawBirth)
+                if (rawBirth.isNotBlank() && birthDate == null) { toast("Data inválida. Use dd/mm/aaaa."); return@setPositiveButton }
                 val schoolYear = schoolInput.text.toString().trim().takeIf { it.isNotBlank() }
                 persist(state.copy(people = state.people.map { p ->
                     if (p.id == person.id) p.copy(name = name, birthDate = birthDate, schoolYear = schoolYear) else p
@@ -789,6 +793,29 @@ class MainActivity : Activity() {
     private fun parseBirthDate(text: String): java.time.LocalDate? {
         if (text.isBlank()) return null
         return runCatching { java.time.LocalDate.parse(text, java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) }.getOrNull()
+    }
+
+    private fun applyDateMask(editText: EditText) {
+        editText.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        editText.addTextChangedListener(object : android.text.TextWatcher {
+            private var isUpdating = false
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                if (isUpdating || s == null) return
+                isUpdating = true
+                val digits = s.toString().filter { it.isDigit() }.take(8)
+                val formatted = StringBuilder()
+                digits.forEachIndexed { i, c ->
+                    if (i == 2 || i == 4) formatted.append('/')
+                    formatted.append(c)
+                }
+                val result = formatted.toString()
+                s.replace(0, s.length, result)
+                editText.setSelection(result.length)
+                isUpdating = false
+            }
+        })
     }
 
     private fun showTaskDialog() {

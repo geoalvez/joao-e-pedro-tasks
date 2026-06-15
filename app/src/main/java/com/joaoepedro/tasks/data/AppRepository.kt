@@ -85,6 +85,8 @@ class AppRepository(context: Context) {
                 .put("lastProcessedDate", state.dailyAllowance.lastProcessedDate?.toString())
             )
             .put("pointValueCents", state.pointValueCents)
+            .put("language", state.language)
+            .put("biometricEnabled", state.biometricEnabled)
             .toString(2)
     }
 
@@ -157,7 +159,9 @@ class AppRepository(context: Context) {
             DailyAllowanceConfig()
         }
         val pointValueCents = root.optInt("pointValueCents", 33)
-        return AppState(people = people, tasks = tasks, missions = missions, transactions = transactions, dailyAllowance = dailyAllowance, pointValueCents = pointValueCents)
+        val language = root.optString("language", "pt").takeIf { it.isNotBlank() } ?: "pt"
+        val biometricEnabled = root.optBoolean("biometricEnabled", false)
+        return AppState(people = people, tasks = tasks, missions = missions, transactions = transactions, dailyAllowance = dailyAllowance, pointValueCents = pointValueCents, language = language, biometricEnabled = biometricEnabled)
     }
 }
 

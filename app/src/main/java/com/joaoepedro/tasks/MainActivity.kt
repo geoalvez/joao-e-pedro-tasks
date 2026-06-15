@@ -9,12 +9,12 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowInsets
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -54,6 +54,8 @@ class MainActivity : Activity() {
     private var pendingPhotoPersonId: String? = null
     private var pendingCameraFile: File? = null
 
+    private val strings get() = AppStrings.get(state.language)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         @Suppress("DEPRECATION")
@@ -63,7 +65,7 @@ class MainActivity : Activity() {
         repository = AppRepository(this)
         state = repository.load()
         showSplash()
-        Handler(Looper.getMainLooper()).postDelayed({ renderApp() }, 1200)
+        Handler(Looper.getMainLooper()).postDelayed({ startRenderApp() }, 1200)
     }
 
     @Deprecated("Deprecated Android callback kept to avoid extra dependencies.")
@@ -75,9 +77,7 @@ class MainActivity : Activity() {
             IMPORT_REQUEST -> data?.data?.let { importFrom(it) }
             PHOTO_REQUEST -> {
                 val uri = data?.data ?: return
-                runCatching {
-                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
+                runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
                 val personId = pendingPhotoPersonId ?: return
                 pendingPhotoPersonId = null
                 state = state.copy(people = state.people.map { p ->
@@ -85,7 +85,7 @@ class MainActivity : Activity() {
                 })
                 repository.save(state)
                 render()
-                toast("Foto atualizada!")
+                toast(strings.toastPhotoUpdated)
             }
             CAMERA_REQUEST -> {
                 val file = pendingCameraFile ?: return
@@ -98,7 +98,7 @@ class MainActivity : Activity() {
                 })
                 repository.save(state)
                 render()
-                toast("Foto atualizada!")
+                toast(strings.toastPhotoUpdated)
             }
         }
     }
@@ -110,7 +110,7 @@ class MainActivity : Activity() {
                 pendingPhotoPersonId?.let { launchCamera(it) }
             } else {
                 pendingPhotoPersonId = null
-                toast("Permissão de câmera negada.")
+                toast(strings.toastCameraDenied)
             }
         }
     }
@@ -134,15 +134,43 @@ class MainActivity : Activity() {
         applySafeArea(container, dp(20), dp(20), dp(20), dp(20))
     }
 
-    private fun renderApp() {
+    private fun startRenderApp() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(COLOR_PAGE)
         }
         setContentView(root)
         applySafeArea(root, 0, 0, 0, 0)
-        processDailyAllowances()
-        render()
+        if (state.biometricEnabled) {
+            showBiometricPrompt {
+                processDailyAllowances()
+                render()
+            }
+        } else {
+            processDailyAllowances()
+            render()
+        }
+    }
+
+    private fun showBiometricPrompt(onSuccess: () -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val prompt = android.hardware.biometrics.BiometricPrompt.Builder(this)
+                .setTitle(strings.biometricTitle)
+                .setSubtitle(strings.biometricSubtitle)
+                .setNegativeButton(strings.biometricCancel, mainExecutor) { _, _ -> finish() }
+                .build()
+            prompt.authenticate(CancellationSignal(), mainExecutor,
+                object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(r: android.hardware.biometrics.BiometricPrompt.AuthenticationResult) {
+                        onSuccess()
+                    }
+                    override fun onAuthenticationError(code: Int, msg: CharSequence) { finish() }
+                    override fun onAuthenticationFailed() {}
+                })
+        } else {
+            toast(strings.biometricNotAvailable)
+            onSuccess()
+        }
     }
 
     private fun processDailyAllowances() {
@@ -157,9 +185,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         root.setBackgroundColor(COLOR_PAGE)
         root.addView(header())
-        val scroll = ScrollView(this).apply {
-            overScrollMode = View.OVER_SCROLL_NEVER
-        }
+        val scroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(20))
@@ -182,10 +208,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(COLOR_ORANGE_PRI)
             setPadding(dp(20), dp(20), dp(20), dp(16))
-            addView(text("João & Pedro", 26, true).apply {
-                setTextColor(Color.WHITE)
-            })
-            addView(text("Tarefas & Recompensas ⭐", 14, false).apply {
+            addView(text("João & Pedro", 26, true).apply { setTextColor(Color.WHITE) })
+            addView(text(strings.headerSubtitle, 14, false).apply {
                 setTextColor(Color.argb(210, 255, 255, 255))
                 setPadding(0, dp(2), 0, 0)
             })
@@ -194,12 +218,12 @@ class MainActivity : Activity() {
 
     private fun bottomNav(): View {
         val navItems = listOf(
-            Tab.Today    to (R.drawable.ic_nav_home     to "Início"),
-            Tab.People   to (R.drawable.ic_nav_family   to "Família"),
-            Tab.Tasks    to (R.drawable.ic_nav_tasks    to "Tarefas"),
-            Tab.Missions to (R.drawable.ic_nav_missions to "Missões"),
-            Tab.Rewards  to (R.drawable.ic_nav_rewards  to "Saldo"),
-            Tab.Data     to (R.drawable.ic_nav_config   to "Config")
+            Tab.Today    to (R.drawable.ic_nav_home     to strings.tabToday),
+            Tab.People   to (R.drawable.ic_nav_family   to strings.tabFamily),
+            Tab.Tasks    to (R.drawable.ic_nav_tasks    to strings.tabTasks),
+            Tab.Missions to (R.drawable.ic_nav_missions to strings.tabMissions),
+            Tab.Rewards  to (R.drawable.ic_nav_rewards  to strings.tabBalance),
+            Tab.Data     to (R.drawable.ic_nav_config   to strings.tabConfig)
         )
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -238,31 +262,27 @@ class MainActivity : Activity() {
     }
 
     private fun renderToday(content: LinearLayout) {
-        content.addView(sectionTitle("Hoje"))
+        content.addView(sectionTitle(strings.sectionToday))
         val activeTasks = state.tasks.filter { it.active }
-        if (activeTasks.isEmpty()) {
-            content.addView(empty("Nenhuma atividade ativa ainda."))
-        }
+        if (activeTasks.isEmpty()) content.addView(empty(strings.noActiveTasks))
         activeTasks.forEach { task ->
             val currentId = rotation.currentPersonId(task, LocalDate.now())
-            val person = state.people.firstOrNull { it.id == currentId }?.name ?: "Sem pessoa"
+            val person = state.people.firstOrNull { it.id == currentId }?.name ?: strings.noPersonAssigned
             val todayCard = card {
                 addView(text(task.title, 17, true))
-                addView(text("Agora", 12, true).apply {
+                addView(text(strings.labelNow, 12, true).apply {
                     setTextColor(COLOR_MUTED)
                     setPadding(0, dp(12), 0, 0)
                 })
                 addView(text(person, 32, true).apply { setTextColor(COLOR_ACCENT) })
-                addView(text("Periodicidade: ${task.periodicity.label}", 14, false).apply {
+                addView(text("${strings.labelPeriodicity}${periodicityLabel(task.periodicity)}", 14, false).apply {
                     setPadding(0, dp(6), 0, 0)
                 })
-                addView(text("Próxima alternância: ${this@MainActivity.rotation.nextChangeDate(task)}", 14, false).apply {
+                addView(text("${strings.labelNextChange}${this@MainActivity.rotation.nextChangeDate(task)}", 14, false).apply {
                     setTextColor(COLOR_MUTED)
                 })
                 if (task.participantIds.size > 1) {
-                    addView(secondaryButton("Trocar próximas tarefas") {
-                        invertFutureAssignments(task.id)
-                    })
+                    addView(secondaryButton(strings.btnSwapTasks) { invertFutureAssignments(task.id) })
                 }
             }
             todayCard.setOnClickListener { showTaskCalendarDialog(task) }
@@ -271,23 +291,17 @@ class MainActivity : Activity() {
     }
 
     private fun renderPeople(content: LinearLayout) {
-        content.addView(rowTitle("Família") { showPersonDialog() })
+        content.addView(rowTitle(strings.sectionFamily) { showPersonDialog() })
         val people = state.people.filterNot { it.archived }
-        if (people.isEmpty()) {
-            content.addView(empty("Nenhuma pessoa cadastrada."))
-            return
-        }
+        if (people.isEmpty()) { content.addView(empty(strings.noPeople)); return }
         val personColors = listOf(COLOR_BLUE, COLOR_ORANGE_PRI, COLOR_GREEN, COLOR_CORAL)
         people.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-                    bottomMargin = dp(14)
-                }
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) }
             }
             pair.forEachIndexed { idx, person ->
-                val colorIndex = (people.indexOf(person)) % personColors.size
-                val avatarColor = personColors[colorIndex]
+                val avatarColor = personColors[(people.indexOf(person)) % personColors.size]
                 val balance = balances.balanceFor(person.id, state.transactions)
                 val personCard = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
@@ -322,17 +336,14 @@ class MainActivity : Activity() {
                             setTextColor(Color.WHITE)
                             typeface = Typeface.DEFAULT_BOLD
                             gravity = Gravity.CENTER
-                            background = GradientDrawable().apply {
-                                shape = GradientDrawable.OVAL
-                                setColor(avatarColor)
-                            }
+                            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(avatarColor) }
                             layoutParams = avatarLp
                         })
                     }
                     addView(text(person.name, 17, true).apply { gravity = Gravity.CENTER })
                     if (person.birthDate != null || person.schoolYear != null) {
                         addView(text(
-                            listOfNotNull(person.schoolYear, person.birthDate?.let { calcAge(it) }?.let { "$it anos" }).joinToString(" · "),
+                            listOfNotNull(person.schoolYear, person.birthDate?.let { calcAge(it) }?.let { "$it ${strings.yearsOld}" }).joinToString(" · "),
                             12, false
                         ).apply {
                             gravity = Gravity.CENTER
@@ -350,39 +361,31 @@ class MainActivity : Activity() {
                 }
                 row.addView(personCard)
             }
-            if (pair.size == 1) {
-                row.addView(View(this).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-                })
-            }
+            if (pair.size == 1) row.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, -2, 1f) })
             content.addView(row)
         }
     }
 
     private fun renderTasks(content: LinearLayout) {
-        content.addView(rowTitle("Atividades") { showTaskDialog() })
+        content.addView(rowTitle(strings.sectionTasks) { showTaskDialog() })
         state.tasks.forEach { task ->
             val names = task.participantIds.mapNotNull { id -> state.people.firstOrNull { it.id == id }?.name }
             val taskCard = card {
                 addView(text(task.title, 18, true))
-                addView(text("Ordem: ${names.joinToString(" -> ")}", 14, false))
+                addView(text("${strings.labelOrder}${names.joinToString(" → ")}", 14, false))
                 val currentId = this@MainActivity.rotation.currentPersonId(task, LocalDate.now())
-                val currentName = state.people.firstOrNull { it.id == currentId }?.name ?: "Sem pessoa"
-                addView(text("Proximo evento: $currentName", 14, true).apply {
+                val currentName = state.people.firstOrNull { it.id == currentId }?.name ?: strings.noPersonAssigned
+                addView(text("${strings.labelNextEvent}$currentName", 14, true).apply {
                     setTextColor(COLOR_ACCENT)
                     setPadding(0, dp(6), 0, 0)
                 })
                 if (task.rotationOffset != 0) {
-                    addView(text("Ajuste manual aplicado: ${task.rotationOffset}", 14, false).apply {
-                        setTextColor(COLOR_MUTED)
-                    })
+                    addView(text("${strings.labelManualAdjust}${task.rotationOffset}", 14, false).apply { setTextColor(COLOR_MUTED) })
                 }
-                addView(text("${task.periodicity.label} desde ${task.startDate}", 14, false).apply {
-                    setTextColor(COLOR_MUTED)
-                })
-                addView(secondaryButton("Associar pessoa") { showAddTaskParticipantDialog(task) })
+                addView(text("${periodicityLabel(task.periodicity)} · ${task.startDate}", 14, false).apply { setTextColor(COLOR_MUTED) })
+                addView(secondaryButton(strings.btnAssociatePerson) { showAddTaskParticipantDialog(task) })
                 if (task.participantIds.isNotEmpty()) {
-                    addView(secondaryButton("Desassociar pessoa") { showRemoveTaskParticipantDialog(task) })
+                    addView(secondaryButton(strings.btnRemovePerson) { showRemoveTaskParticipantDialog(task) })
                 }
             }
             taskCard.setOnClickListener { showTaskCalendarDialog(task) }
@@ -391,26 +394,17 @@ class MainActivity : Activity() {
     }
 
     private fun renderMissions(content: LinearLayout) {
-        content.addView(rowTitle("Missoes") { showMissionDialog() })
-        if (state.missions.isEmpty()) {
-            content.addView(empty("Nenhuma missao cadastrada."))
-        }
+        content.addView(rowTitle(strings.sectionMissions) { showMissionDialog() })
+        if (state.missions.isEmpty()) content.addView(empty(strings.noMissions))
         state.missions.forEach { mission ->
             val participants = mission.participantIds
                 .mapNotNull { id -> state.people.firstOrNull { it.id == id }?.name }
-                .joinToString(", ")
-                .ifBlank { "Sem participantes" }
+                .joinToString(", ").ifBlank { strings.noParticipants }
             content.addView(card {
                 addView(text(mission.title, 18, true))
-                addView(text("Recompensa: ${mission.rewardAmount} pontos para cada participante", 14, false).apply {
-                    setTextColor(COLOR_ACCENT)
-                })
-                addView(text("Participantes: $participants", 14, false).apply {
-                    setTextColor(COLOR_MUTED)
-                })
-                if (mission.phases.isEmpty()) {
-                    addView(text("Sem fases ainda.", 14, false).apply { setTextColor(COLOR_MUTED) })
-                }
+                addView(text(String.format(strings.labelRewardPerParticipant, mission.rewardAmount), 14, false).apply { setTextColor(COLOR_ACCENT) })
+                addView(text("${strings.labelParticipants}$participants", 14, false).apply { setTextColor(COLOR_MUTED) })
+                if (mission.phases.isEmpty()) addView(text(strings.noPhases, 14, false).apply { setTextColor(COLOR_MUTED) })
                 mission.phases.forEach { phase ->
                     addView(CheckBox(context).apply {
                         text = phase.title
@@ -418,55 +412,51 @@ class MainActivity : Activity() {
                         setTextColor(COLOR_INK)
                         isChecked = phase.checked
                         isEnabled = !mission.isCompleted()
-                        setOnCheckedChangeListener { _, checked ->
-                            toggleMissionPhase(mission.id, phase.id, checked)
-                        }
+                        setOnCheckedChangeListener { _, checked -> toggleMissionPhase(mission.id, phase.id, checked) }
                     })
                 }
                 val status = when {
-                    mission.isCompleted() -> "Concluida"
-                    mission.isReadyToComplete() -> "Pronta para concluir"
-                    else -> "Em andamento"
+                    mission.isCompleted() -> strings.statusCompleted
+                    mission.isReadyToComplete() -> strings.statusReady
+                    else -> strings.statusInProgress
                 }
                 addView(text(status, 14, true).apply {
                     setTextColor(if (mission.isCompleted()) COLOR_ACCENT else COLOR_MUTED)
                     setPadding(0, dp(8), 0, 0)
                 })
                 if (!mission.isCompleted()) {
-                    addView(secondaryButton("Adicionar fase") { showMissionPhaseDialog(mission) })
-                    addView(secondaryButton("Associar pessoa") { showAddMissionParticipantDialog(mission) })
+                    addView(secondaryButton(strings.btnAddPhase) { showMissionPhaseDialog(mission) })
+                    addView(secondaryButton(strings.btnAssociatePerson) { showAddMissionParticipantDialog(mission) })
                     if (mission.participantIds.isNotEmpty()) {
-                        addView(secondaryButton("Desassociar pessoa") { showRemoveMissionParticipantDialog(mission) })
+                        addView(secondaryButton(strings.btnRemovePerson) { showRemoveMissionParticipantDialog(mission) })
                     }
                     if (mission.isReadyToComplete()) {
-                        addView(primaryButton("Concluir e creditar") { completeMission(mission.id) })
+                        addView(primaryButton(strings.btnCompleteCredit) { completeMission(mission.id) })
                     }
                 }
-                addView(secondaryButton("Excluir missão") { confirmDeleteMission(mission.id, mission.title) })
+                addView(secondaryButton(strings.btnDeleteMission) { confirmDeleteMission(mission.id, mission.title) })
             })
         }
     }
 
     private fun renderRewards(content: LinearLayout) {
-        content.addView(rowTitle("Recompensas") { showTransactionTypeChooser() })
+        content.addView(rowTitle(strings.sectionRewards) { showTransactionTypeChooser() })
         state.people.filterNot { it.archived }.forEach { person ->
             val balance = balances.balanceFor(person.id, state.transactions)
             val rewardCard = card {
                 addView(text(person.name, 18, true))
-                addView(text("Saldo: ${balance.formatPoints()} pontos", 22, true).apply { setTextColor(COLOR_ACCENT) })
+                addView(text(String.format(strings.labelBalance, balance.formatPoints()), 22, true).apply { setTextColor(COLOR_ACCENT) })
                 addView(text(formatReais(balance, state.pointValueCents), 15, true).apply {
                     setTextColor(COLOR_GREEN)
                     setPadding(0, dp(2), 0, dp(4))
                 })
-                state.transactions
-                    .filter { it.personId == person.id }
-                    .sortedByDescending { it.createdAt }
-                    .take(5)
+                state.transactions.filter { it.personId == person.id }
+                    .sortedByDescending { it.createdAt }.take(5)
                     .forEach { tx ->
                         val signed = tx.amount * tx.type.sign
-                        addView(text("${tx.createdAt}  ${tx.type.label}: ${signed.formatSigned()} - ${tx.reason}", 13, false))
+                        addView(text("${tx.createdAt}  ${txTypeLabel(tx.type)}: ${signed.formatSigned()} - ${tx.reason}", 13, false))
                     }
-                addView(text("Toque para ver o extrato completo", 12, true).apply {
+                addView(text(strings.tapForStatement, 12, true).apply {
                     setTextColor(COLOR_BLUE)
                     setPadding(0, dp(10), 0, 0)
                 })
@@ -477,80 +467,102 @@ class MainActivity : Activity() {
     }
 
     private fun renderData(content: LinearLayout) {
-        content.addView(sectionTitle("Ajuda"))
+        content.addView(sectionTitle(strings.sectionConfig))
+        content.addView(card {
+            addView(text(strings.cardLanguage, 18, true))
+            addView(text(languageName(state.language), 14, false).apply { setTextColor(COLOR_MUTED) })
+            addView(secondaryButton(strings.btnConfigure) { showLanguageDialog() })
+        })
+        content.addView(card {
+            addView(text(strings.cardBiometric, 18, true))
+            addView(text(if (state.biometricEnabled) strings.biometricOn else strings.biometricOff, 14, false).apply { setTextColor(COLOR_MUTED) })
+            val btnLabel = if (state.biometricEnabled) strings.btnDisableBiometric else strings.btnEnableBiometric
+            addView(secondaryButton(btnLabel) { toggleBiometric() })
+        })
         val config = state.dailyAllowance
         content.addView(card {
-            addView(text("Valor do ponto", 18, true))
-            addView(text("1 ponto = ${formatReais(1.0, state.pointValueCents)}", 14, false).apply { setTextColor(COLOR_MUTED) })
-            addView(secondaryButton("Configurar") { showPointValueDialog() })
+            addView(text(strings.cardPointValue, 18, true))
+            addView(text(String.format(strings.pointValueDesc, formatReais(1.0, state.pointValueCents)), 14, false).apply { setTextColor(COLOR_MUTED) })
+            addView(secondaryButton(strings.btnConfigure) { showPointValueDialog() })
         })
         content.addView(card {
-            addView(text("Mesada diária", 18, true))
+            addView(text(strings.cardDailyAllowance, 18, true))
             val statusText = if (config.enabledSince != null)
-                "Ativa desde ${config.enabledSince} · ${config.amountPerDay} pontos/dia"
-            else
-                "Desativada"
+                String.format(strings.statusEnabledSince, config.enabledSince, config.amountPerDay)
+            else strings.statusDisabled
             addView(text(statusText, 14, false).apply { setTextColor(COLOR_MUTED) })
-            addView(secondaryButton("Configurar") { showDailyAllowanceDialog() })
+            addView(secondaryButton(strings.btnConfigure) { showDailyAllowanceDialog() })
         })
         content.addView(card {
-            addView(text("Backup local", 18, true))
-            addView(text("Exporte um arquivo JSON e copie para outro aparelho. Ao importar, os dados atuais são substituídos pelo arquivo escolhido.", 14, false))
-            addView(stackedButton("Gerar arquivo de backup", true) { chooseExportFile() })
-            addView(stackedButton("Restaurar de arquivo", false) { chooseImportFile() })
+            addView(text(strings.cardBackup, 18, true))
+            addView(text(strings.backupDesc, 14, false))
+            addView(stackedButton(strings.btnGenerateBackup, true) { chooseExportFile() })
+            addView(stackedButton(strings.btnRestoreBackup, false) { chooseImportFile() })
         })
         content.addView(card {
-            addView(text("Resumo", 18, true))
-            addView(text("${state.people.size} pessoas", 14, false))
-            addView(text("${state.tasks.size} atividades", 14, false))
-            addView(text("${state.transactions.size} movimentações", 14, false))
+            addView(text(strings.cardSummary, 18, true))
+            addView(text(String.format(strings.labelPeople, state.people.size), 14, false))
+            addView(text(String.format(strings.labelActivities, state.tasks.size), 14, false))
+            addView(text(String.format(strings.labelTransactions, state.transactions.size), 14, false))
         })
         content.addView(developerCard())
     }
 
+    private fun showLanguageDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(strings.titleLanguage)
+            .setItems(arrayOf("🇧🇷 Português", "🇪🇸 Español", "🇺🇸 English")) { _, which ->
+                val lang = when (which) { 0 -> "pt"; 1 -> "es"; else -> "en" }
+                persist(state.copy(language = lang))
+            }
+            .show()
+    }
+
+    private fun toggleBiometric() {
+        if (!state.biometricEnabled) {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P) {
+                toast(strings.biometricNotAvailable)
+                return
+            }
+            showBiometricPrompt { persist(state.copy(biometricEnabled = true)) }
+        } else {
+            persist(state.copy(biometricEnabled = false))
+        }
+    }
+
     private fun showPointValueDialog() {
         val layout = dialogLayout()
-        layout.addView(label("Valor em reais por ponto"))
+        layout.addView(label(strings.cardPointValue))
         val input = EditText(this).apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-            hint = "Ex: 0.33"
+            hint = strings.hintPointValue
             val current = state.pointValueCents / 100.0
-            setText(String.format(java.util.Locale("pt", "BR"), "%.2f", current).replace(',', '.'))
+            setText(String.format(java.util.Locale.US, "%.2f", current))
             setSingleLine(true)
         }
         layout.addView(input)
-        layout.addView(text("Use ponto como separador decimal. Ex: 0.33 = R$ 0,33", 12, false).apply {
+        layout.addView(text(strings.notePointValue, 12, false).apply {
             setTextColor(COLOR_MUTED)
             setPadding(0, dp(4), 0, 0)
         })
         AlertDialog.Builder(this)
-            .setTitle("Valor do ponto")
+            .setTitle(strings.titlePointValue)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Salvar") { _, _ ->
-                val raw = input.text.toString().trim().replace(',', '.')
-                val value = raw.toDoubleOrNull()
-                if (value == null || value <= 0) {
-                    toast("Informe um valor válido.")
-                    return@setPositiveButton
-                }
-                val cents = (value * 100).toInt().coerceAtLeast(1)
-                state = state.copy(pointValueCents = cents)
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave) { _, _ ->
+                val value = input.text.toString().trim().replace(',', '.').toDoubleOrNull()
+                if (value == null || value <= 0) { toast(strings.toastInformAmount); return@setPositiveButton }
+                state = state.copy(pointValueCents = (value * 100).toInt().coerceAtLeast(1))
                 repository.save(state)
                 render()
             }
             .show()
     }
 
-    private fun formatReais(points: Double, pointValueCents: Int): String {
-        val total = points * pointValueCents / 100.0
-        return String.format(java.util.Locale("pt", "BR"), "R$ %.2f", total)
-    }
-
     private fun showDailyAllowanceDialog() {
         val config = state.dailyAllowance
         val layout = dialogLayout()
-        layout.addView(label("Valor por dia (pontos)"))
+        layout.addView(label(strings.labelAmountPerDay))
         val amountInput = EditText(this).apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
             hint = "0"
@@ -559,26 +571,20 @@ class MainActivity : Activity() {
         }
         layout.addView(amountInput)
         val builder = AlertDialog.Builder(this)
-            .setTitle("Mesada diária")
+            .setTitle(strings.titleDailyAllowance)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton(if (config.enabledSince != null) "Salvar" else "Ativar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(if (config.enabledSince != null) strings.btnSave else strings.btnActivate) { _, _ ->
                 val amount = amountInput.text.toString().trim().toIntOrNull() ?: 0
-                if (amount <= 0) {
-                    toast("Informe um valor maior que zero.")
-                    return@setPositiveButton
-                }
-                val newConfig = config.copy(
-                    amountPerDay = amount,
-                    enabledSince = config.enabledSince ?: LocalDate.now()
-                )
+                if (amount <= 0) { toast(strings.toastAmountGreaterZero); return@setPositiveButton }
+                val newConfig = config.copy(amountPerDay = amount, enabledSince = config.enabledSince ?: LocalDate.now())
                 state = state.copy(dailyAllowance = newConfig)
                 processDailyAllowances()
                 repository.save(state)
                 render()
             }
         if (config.enabledSince != null) {
-            builder.setNeutralButton("Desativar") { _, _ ->
+            builder.setNeutralButton(strings.btnDeactivate) { _, _ ->
                 state = state.copy(dailyAllowance = config.copy(enabledSince = null))
                 repository.save(state)
                 render()
@@ -605,85 +611,44 @@ class MainActivity : Activity() {
                 setImageResource(R.drawable.instagram_logo)
                 adjustViewBounds = true
                 scaleType = ImageView.ScaleType.FIT_CENTER
-            }, LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-                setMargins(0, 0, dp(8), 0)
-            })
-            addView(text("Instagram @geoalvez", 14, true).apply {
-                setTextColor(COLOR_BLUE)
-            })
-            setOnClickListener { openInstagramProfile() }
+            }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { setMargins(0, 0, dp(8), 0) })
+            addView(text("Instagram @geoalvez", 14, true).apply { setTextColor(COLOR_BLUE) })
+            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.instagram.com/geoalvez/"))) }
         })
-    }
-
-    private fun openInstagramProfile() {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.instagram.com/geoalvez/"))
-        startActivity(intent)
     }
 
     private fun showTaskCalendarDialog(task: ActivityTask) {
         val month = YearMonth.from(LocalDate.now())
         val firstDay = month.atDay(1)
-        val lastDay = month.atEndOfMonth()
-        val assignments = rotation.assignmentsBetween(task, firstDay, lastDay).toMap()
+        val assignments = rotation.assignmentsBetween(task, firstDay, month.atEndOfMonth()).toMap()
         val layout = dialogLayout()
         layout.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             background = roundedDrawable(COLOR_BLUE_SOFT, 18f, 1, COLOR_BLUE)
             setPadding(dp(14), dp(12), dp(14), dp(12))
-            addView(text("Calendario da atividade", 13, true).apply {
-                gravity = Gravity.CENTER
-                setTextColor(COLOR_BLUE)
-            })
-            addView(text("${month.monthValue}/${month.year}", 28, true).apply {
-                gravity = Gravity.CENTER
-                setTextColor(COLOR_INK)
-            })
-            addView(text("Comeca em ${task.startDate}", 12, false).apply {
-                gravity = Gravity.CENTER
-                setTextColor(COLOR_MUTED)
-            })
-        }, LinearLayout.LayoutParams(-1, -2).apply {
-            setMargins(0, 0, 0, dp(14))
-        })
-        val grid = GridLayout(this).apply {
-            columnCount = 7
-            rowCount = 7
-        }
-        listOf("Seg", "Ter", "Qua", "Qui", "Sex", "Sab", "Dom").forEach { day ->
-            grid.addView(text(day, 11, true).apply {
-                gravity = Gravity.CENTER
-                setTextColor(COLOR_MUTED)
-            }, GridLayout.LayoutParams().apply {
-                width = dp(42)
-                height = dp(28)
-            })
+            addView(text(strings.labelCalendar, 13, true).apply { gravity = Gravity.CENTER; setTextColor(COLOR_BLUE) })
+            addView(text("${month.monthValue}/${month.year}", 28, true).apply { gravity = Gravity.CENTER; setTextColor(COLOR_INK) })
+            addView(text(String.format(strings.labelStartsAt, task.startDate), 12, false).apply { gravity = Gravity.CENTER; setTextColor(COLOR_MUTED) })
+        }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(14)) })
+        val grid = GridLayout(this).apply { columnCount = 7; rowCount = 7 }
+        strings.weekDays.forEach { day ->
+            grid.addView(text(day, 11, true).apply { gravity = Gravity.CENTER; setTextColor(COLOR_MUTED) }, GridLayout.LayoutParams().apply { width = dp(42); height = dp(28) })
         }
         repeat(firstDay.dayOfWeek.value - 1) {
-            grid.addView(View(this), GridLayout.LayoutParams().apply {
-                width = dp(42)
-                height = dp(62)
-            })
+            grid.addView(View(this), GridLayout.LayoutParams().apply { width = dp(42); height = dp(62) })
         }
         (1..month.lengthOfMonth()).forEach { day ->
             val date = month.atDay(day)
             val personId = assignments[date]
-            val personName = if (date.isBefore(task.startDate)) {
-                ""
-            } else {
-                state.people.firstOrNull { it.id == personId }?.name ?: "Sem pessoa"
-            }
-            grid.addView(calendarDayCell(date, personName, date.isBefore(task.startDate)), GridLayout.LayoutParams().apply {
-                width = dp(44)
-                height = dp(68)
-                setMargins(dp(2), dp(2), dp(2), dp(2))
-            })
+            val personName = if (date.isBefore(task.startDate)) "" else state.people.firstOrNull { it.id == personId }?.name ?: strings.noPersonAssigned
+            grid.addView(calendarDayCell(date, personName, date.isBefore(task.startDate)), GridLayout.LayoutParams().apply { width = dp(44); height = dp(68); setMargins(dp(2), dp(2), dp(2), dp(2)) })
         }
         layout.addView(grid)
         AlertDialog.Builder(this)
             .setTitle(task.title)
             .setView(ScrollView(this).apply { addView(layout) })
-            .setPositiveButton("Fechar", null)
+            .setPositiveButton(strings.btnClose, null)
             .show()
     }
 
@@ -693,35 +658,15 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             background = roundedDrawable(
-                when {
-                    beforeStart -> COLOR_DISABLED
-                    isToday -> COLOR_CORAL_SOFT
-                    personName.isNotBlank() -> COLOR_BLUE_SOFT
-                    else -> Color.WHITE
-                },
-                14f,
-                1,
-                when {
-                    beforeStart -> COLOR_DISABLED_STROKE
-                    isToday -> COLOR_CORAL
-                    personName.isNotBlank() -> COLOR_BLUE
-                    else -> COLOR_BORDER
-                }
+                when { beforeStart -> COLOR_DISABLED; isToday -> COLOR_CORAL_SOFT; personName.isNotBlank() -> COLOR_BLUE_SOFT; else -> Color.WHITE },
+                14f, 1,
+                when { beforeStart -> COLOR_DISABLED_STROKE; isToday -> COLOR_CORAL; personName.isNotBlank() -> COLOR_BLUE; else -> COLOR_BORDER }
             )
             setPadding(dp(2), dp(4), dp(2), dp(4))
-            addView(text(date.dayOfMonth.toString(), 13, true).apply {
-                gravity = Gravity.CENTER
-                setTextColor(if (beforeStart) COLOR_MUTED else COLOR_INK)
-            })
+            addView(text(date.dayOfMonth.toString(), 13, true).apply { gravity = Gravity.CENTER; setTextColor(if (beforeStart) COLOR_MUTED else COLOR_INK) })
             addView(text(if (beforeStart) "--" else personName.take(8), 10, true).apply {
                 gravity = Gravity.CENTER
-                setTextColor(
-                    when {
-                        beforeStart -> COLOR_MUTED
-                        isToday -> COLOR_CORAL
-                        else -> COLOR_BLUE
-                    }
-                )
+                setTextColor(when { beforeStart -> COLOR_MUTED; isToday -> COLOR_CORAL; else -> COLOR_BLUE })
                 maxLines = 2
             })
         }
@@ -729,22 +674,22 @@ class MainActivity : Activity() {
 
     private fun showPersonDialog() {
         val layout = dialogLayout()
-        val nameInput = edit("Nome da criança", "")
-        val birthInput = edit("Data de nascimento (dd/mm/aaaa)", "")
-        val schoolInput = edit("Escolaridade (ex: 3º ano do Fundamental)", "")
-        layout.addView(label("Nome *"))
+        val nameInput = edit(strings.hintChildName, "")
+        val birthInput = edit(strings.hintBirthDate, "")
+        val schoolInput = edit(strings.hintSchoolYear, "")
+        layout.addView(label(strings.nameLabel))
         layout.addView(nameInput)
-        layout.addView(label("Data de nascimento"))
+        layout.addView(label(strings.hintBirthDate))
         layout.addView(birthInput)
-        layout.addView(label("Escolaridade"))
+        layout.addView(label(strings.hintSchoolYear))
         layout.addView(schoolInput)
         AlertDialog.Builder(this)
-            .setTitle("Nova pessoa")
+            .setTitle(strings.titleNewPerson)
             .setView(ScrollView(this).apply { addView(layout) })
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Salvar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave) { _, _ ->
                 val name = nameInput.text.toString().trim()
-                if (name.isBlank()) { toast("Informe um nome."); return@setPositiveButton }
+                if (name.isBlank()) { toast(strings.toastInformName); return@setPositiveButton }
                 val birthDate = parseBirthDate(birthInput.text.toString().trim())
                 val schoolYear = schoolInput.text.toString().trim().takeIf { it.isNotBlank() }
                 persist(state.copy(people = state.people + Person(name = name, birthDate = birthDate, schoolYear = schoolYear)))
@@ -754,25 +699,25 @@ class MainActivity : Activity() {
 
     private fun showPersonProfileDialog(person: Person) {
         val layout = dialogLayout()
-        val nameInput = edit("Nome da criança", person.name)
-        val birthInput = edit("Data de nascimento (dd/mm/aaaa)", person.birthDate?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "")
-        val schoolInput = edit("Escolaridade (ex: 3º ano do Fundamental)", person.schoolYear ?: "")
+        val nameInput = edit(strings.hintChildName, person.name)
+        val birthInput = edit(strings.hintBirthDate, person.birthDate?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "")
+        val schoolInput = edit(strings.hintSchoolYear, person.schoolYear ?: "")
         val photoStatus = TextView(this).apply {
-            text = if (person.photoUri != null) "✓ Foto definida" else "Nenhuma foto selecionada"
+            text = if (person.photoUri != null) strings.photoSet else strings.noPhotoSelected
             textSize = 13f
             setTextColor(if (person.photoUri != null) COLOR_GREEN else COLOR_MUTED)
             setPadding(0, dp(4), 0, 0)
         }
-        layout.addView(label("Nome *"))
+        layout.addView(label(strings.nameLabel))
         layout.addView(nameInput)
-        layout.addView(label("Data de nascimento"))
+        layout.addView(label(strings.hintBirthDate))
         layout.addView(birthInput)
-        layout.addView(label("Escolaridade"))
+        layout.addView(label(strings.hintSchoolYear))
         layout.addView(schoolInput)
-        layout.addView(label("Foto de perfil"))
+        layout.addView(label(strings.labelProfilePhoto))
         layout.addView(photoStatus)
         layout.addView(TextView(this).apply {
-            text = "📷  Escolher foto"
+            text = strings.btnChoosePhoto
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_ORANGE_PRI)
@@ -780,12 +725,12 @@ class MainActivity : Activity() {
             setOnClickListener { choosePhotoSource(person.id) }
         })
         val builder = AlertDialog.Builder(this)
-            .setTitle("Perfil — ${person.name}")
+            .setTitle(String.format(strings.titleEditProfile, person.name))
             .setView(ScrollView(this).apply { addView(layout) })
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Salvar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave) { _, _ ->
                 val name = nameInput.text.toString().trim()
-                if (name.isBlank()) { toast("Informe um nome."); return@setPositiveButton }
+                if (name.isBlank()) { toast(strings.toastInformName); return@setPositiveButton }
                 val birthDate = parseBirthDate(birthInput.text.toString().trim())
                 val schoolYear = schoolInput.text.toString().trim().takeIf { it.isNotBlank() }
                 persist(state.copy(people = state.people.map { p ->
@@ -793,7 +738,7 @@ class MainActivity : Activity() {
                 }))
             }
         if (!person.archived) {
-            builder.setNeutralButton("Arquivar") { _, _ ->
+            builder.setNeutralButton(strings.btnArchive) { _, _ ->
                 persist(state.copy(people = state.people.map { p ->
                     if (p.id == person.id) p.copy(archived = true) else p
                 }))
@@ -804,8 +749,8 @@ class MainActivity : Activity() {
 
     private fun choosePhotoSource(personId: String) {
         AlertDialog.Builder(this)
-            .setTitle("Escolher foto")
-            .setItems(arrayOf("Tirar foto com câmera", "Escolher da galeria")) { _, which ->
+            .setTitle(strings.titlePhotoSource)
+            .setItems(arrayOf(strings.optCamera, strings.optGallery)) { _, which ->
                 when (which) {
                     0 -> {
                         pendingPhotoPersonId = personId
@@ -843,33 +788,26 @@ class MainActivity : Activity() {
 
     private fun parseBirthDate(text: String): java.time.LocalDate? {
         if (text.isBlank()) return null
-        return runCatching {
-            java.time.LocalDate.parse(text, java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
-        }.getOrNull()
+        return runCatching { java.time.LocalDate.parse(text, java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) }.getOrNull()
     }
 
     private fun showTaskDialog() {
         val layout = dialogLayout()
-        val titleInput = edit("Ex: Tomar banho, Arrumar o quarto...", "")
-        val periodicitySpinner = spinner(Periodicity.entries.map { it.label })
+        val titleInput = edit(strings.hintActivityName, "")
+        val periodicityItems = listOf(strings.periodicityDaily, strings.periodicityWeekly, strings.periodicityMonthly)
+        val periodicitySpinner = spinner(periodicityItems)
         layout.addView(titleInput)
-        layout.addView(label("Periodicidade"))
+        layout.addView(label(strings.labelPeriodicity2))
         layout.addView(periodicitySpinner)
         AlertDialog.Builder(this)
-            .setTitle("Nova atividade")
+            .setTitle(strings.titleNewActivity)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Salvar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave) { _, _ ->
                 val title = titleInput.text.toString().trim()
-                if (title.isBlank()) {
-                    toast("Informe um nome.")
-                    return@setPositiveButton
-                }
+                if (title.isBlank()) { toast(strings.toastInformName); return@setPositiveButton }
                 val participants = state.people.filterNot { it.archived }.take(2).map { it.id }
-                if (participants.size < 2) {
-                    toast("Cadastre pelo menos duas pessoas.")
-                    return@setPositiveButton
-                }
+                if (participants.size < 2) { toast(strings.toastRegisterTwo); return@setPositiveButton }
                 val task = ActivityTask(
                     title = title,
                     periodicity = Periodicity.entries[periodicitySpinner.selectedItemPosition],
@@ -882,26 +820,18 @@ class MainActivity : Activity() {
 
     private fun showAddTaskParticipantDialog(task: ActivityTask) {
         val candidates = state.people.filterNot { it.archived || it.id in task.participantIds }
-        if (candidates.isEmpty()) {
-            toast("Nao ha pessoas disponiveis para associar.")
-            return
-        }
+        if (candidates.isEmpty()) { toast(strings.toastNoPeopleAvailable); return }
         val personSpinner = spinner(candidates.map { it.name })
-        val layout = dialogLayout().apply {
-            addView(label("Pessoa"))
-            addView(personSpinner)
-        }
+        val layout = dialogLayout().apply { addView(label(strings.labelPerson)); addView(personSpinner) }
         AlertDialog.Builder(this)
-            .setTitle("Associar pessoa")
+            .setTitle(strings.btnAssociatePerson)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Associar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnAssociate) { _, _ ->
                 val person = candidates[personSpinner.selectedItemPosition]
-                val updatedTasks = state.tasks.map {
-                    if (it.id == task.id) rotation.addParticipantAndMakeCurrent(it, person.id) else it
-                }
+                val updatedTasks = state.tasks.map { if (it.id == task.id) rotation.addParticipantAndMakeCurrent(it, person.id) else it }
                 persist(state.copy(tasks = updatedTasks))
-                toast("${person.name} sera o proximo evento.")
+                toast(String.format(strings.toastNextEvent, person.name))
             }
             .show()
     }
@@ -910,19 +840,14 @@ class MainActivity : Activity() {
         val participants = task.participantIds.mapNotNull { id -> state.people.firstOrNull { it.id == id } }
         if (participants.isEmpty()) return
         val personSpinner = spinner(participants.map { it.name })
-        val layout = dialogLayout().apply {
-            addView(label("Pessoa"))
-            addView(personSpinner)
-        }
+        val layout = dialogLayout().apply { addView(label(strings.labelPerson)); addView(personSpinner) }
         AlertDialog.Builder(this)
-            .setTitle("Desassociar pessoa")
+            .setTitle(strings.btnRemovePerson)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Desassociar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnDisassociate) { _, _ ->
                 val person = participants[personSpinner.selectedItemPosition]
-                val updatedTasks = state.tasks.map {
-                    if (it.id == task.id) rotation.removeParticipant(it, person.id) else it
-                }
+                val updatedTasks = state.tasks.map { if (it.id == task.id) rotation.removeParticipant(it, person.id) else it }
                 persist(state.copy(tasks = updatedTasks))
             }
             .show()
@@ -930,46 +855,21 @@ class MainActivity : Activity() {
 
     private fun showMissionDialog() {
         val people = state.people.filterNot { it.archived }
-        if (people.isEmpty()) {
-            toast("Cadastre uma pessoa primeiro.")
-            return
-        }
-        val layout = friendlyDialogLayout(
-            title = "Nova missao",
-            subtitle = "Defina participantes, recompensa e etapas."
-        )
-        val titleInput = edit("Nome da missao", "")
-        val rewardInput = edit("Valor em pontos por participante", "").apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        }
-        val phaseInput = edit("Nome da etapa", "")
-        val phaseCountInput = edit("Quantidade de etapas", "").apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        }
+        if (people.isEmpty()) { toast(strings.toastInformName); return }
+        val layout = friendlyDialogLayout(strings.titleNewMission, strings.subtitleNewMission)
+        val titleInput = edit(strings.hintMissionName, "")
+        val rewardInput = edit(strings.hintRewardPoints, "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val phaseInput = edit(strings.hintPhaseName, "")
+        val phaseCountInput = edit(strings.hintPhaseCount, "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
         val phases = mutableListOf<MissionPhase>()
-        val phaseList = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        val errorText = text("", 13, true).apply {
-            setTextColor(COLOR_CORAL)
-            visibility = View.GONE
-            setPadding(0, dp(8), 0, dp(4))
-        }
-        fun showMissionError(message: String) {
-            errorText.text = message
-            errorText.visibility = View.VISIBLE
-        }
-        fun clearMissionError() {
-            errorText.text = ""
-            errorText.visibility = View.GONE
-        }
+        val phaseList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val errorText = text("", 13, true).apply { setTextColor(COLOR_CORAL); visibility = View.GONE; setPadding(0, dp(8), 0, dp(4)) }
+        fun showErr(msg: String) { errorText.text = msg; errorText.visibility = View.VISIBLE }
+        fun clearErr() { errorText.text = ""; errorText.visibility = View.GONE }
         fun refreshPhaseList() {
             phaseList.removeAllViews()
             if (phases.isEmpty()) {
-                phaseList.addView(text("Nenhuma etapa adicionada.", 13, false).apply {
-                    setTextColor(COLOR_MUTED)
-                    setPadding(0, dp(6), 0, dp(6))
-                })
+                phaseList.addView(text(strings.noPhasesAdded, 13, false).apply { setTextColor(COLOR_MUTED); setPadding(0, dp(6), 0, dp(6)) })
             } else {
                 phases.forEachIndexed { index, phase ->
                     phaseList.addView(LinearLayout(this).apply {
@@ -978,103 +878,53 @@ class MainActivity : Activity() {
                         background = roundedDrawable(COLOR_BLUE_SOFT, 14f, 1, COLOR_BLUE)
                         setPadding(dp(10), dp(8), dp(8), dp(8))
                         addView(text("${index + 1}. ${phase.title}", 14, true), LinearLayout.LayoutParams(0, -2, 1f))
-                        addView(text("Remover", 12, true).apply {
+                        addView(text(strings.btnRemove, 12, true).apply {
                             gravity = Gravity.CENTER
                             setTextColor(COLOR_CORAL)
-                            setOnClickListener {
-                                phases.removeAt(index)
-                                refreshPhaseList()
-                            }
+                            setOnClickListener { phases.removeAt(index); refreshPhaseList() }
                         }, LinearLayout.LayoutParams(dp(78), dp(34)))
-                    }, LinearLayout.LayoutParams(-1, -2).apply {
-                        setMargins(0, 0, 0, dp(8))
-                    })
+                    }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(8)) })
                 }
             }
         }
-        val participantChecks = people.map { person ->
-            CheckBox(this).apply {
-                text = person.name
-                textSize = 14f
-                setTextColor(COLOR_INK)
-                isChecked = true
-            }
-        }
-        layout.addView(label("Dados da missao"))
+        val participantChecks = people.map { person -> CheckBox(this).apply { text = person.name; textSize = 14f; setTextColor(COLOR_INK); isChecked = true } }
+        layout.addView(label(strings.labelMissionData))
         layout.addView(titleInput)
         layout.addView(rewardInput)
-        layout.addView(label("Participantes que recebem"))
+        layout.addView(label(strings.labelParticipantsReceive))
         participantChecks.forEach { layout.addView(it) }
-        layout.addView(label("Etapas"))
+        layout.addView(label(strings.labelPhases))
         layout.addView(phaseInput)
-        layout.addView(secondaryButton("Adicionar etapa") {
+        layout.addView(secondaryButton(strings.btnAddPhaseInDialog) {
             val title = phaseInput.text.toString().trim()
-            if (title.isBlank()) {
-                showMissionError("Informe o nome da etapa antes de adicionar.")
-                return@secondaryButton
-            }
-            clearMissionError()
-            phases.add(MissionPhase(title = title))
-            phaseInput.setText("")
-            refreshPhaseList()
+            if (title.isBlank()) { showErr(strings.toastInformName); return@secondaryButton }
+            clearErr(); phases.add(MissionPhase(title = title)); phaseInput.setText(""); refreshPhaseList()
         })
-        layout.addView(text("Ou gere automaticamente", 13, true).apply {
-            setTextColor(COLOR_MUTED)
-            setPadding(0, dp(14), 0, dp(4))
-        })
+        layout.addView(text(strings.orGenerateAuto, 13, true).apply { setTextColor(COLOR_MUTED); setPadding(0, dp(14), 0, dp(4)) })
         layout.addView(phaseCountInput)
-        layout.addView(secondaryButton("Gerar etapas") {
+        layout.addView(secondaryButton(strings.btnGeneratePhases) {
             val count = phaseCountInput.text.toString().toIntOrNull() ?: 0
-            if (count <= 0) {
-                showMissionError("Informe uma quantidade de etapas maior que zero.")
-                return@secondaryButton
-            }
-            clearMissionError()
-            phases.clear()
-            phases.addAll((1..count).map { MissionPhase(title = "Etapa $it/$count") })
-            refreshPhaseList()
+            if (count <= 0) { showErr(strings.toastAmountGreaterZero); return@secondaryButton }
+            clearErr(); phases.clear()
+            phases.addAll((1..count).map { MissionPhase(title = String.format(strings.phaseTemplate, it, count)) }); refreshPhaseList()
         })
-        refreshPhaseList()
-        layout.addView(phaseList)
-        layout.addView(errorText)
+        refreshPhaseList(); layout.addView(phaseList); layout.addView(errorText)
         val dialog = AlertDialog.Builder(this)
             .setView(ScrollView(this).apply { addView(layout) })
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Salvar", null)
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave, null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val title = titleInput.text.toString().trim()
                 val reward = rewardInput.text.toString().toIntOrNull() ?: 0
-                val selectedParticipants = people
-                    .zip(participantChecks)
-                    .filter { it.second.isChecked }
-                    .map { it.first.id }
-                if (title.isBlank()) {
-                    showMissionError("Informe o nome da missao.")
-                    return@setOnClickListener
-                }
-                if (reward <= 0) {
-                    showMissionError("Informe um valor em pontos maior que zero.")
-                    return@setOnClickListener
-                }
-                if (selectedParticipants.isEmpty()) {
-                    showMissionError("Selecione pelo menos um participante.")
-                    return@setOnClickListener
-                }
-                if (phases.isEmpty()) {
-                    showMissionError("Adicione pelo menos uma etapa.")
-                    return@setOnClickListener
-                }
-                val mission = Mission(
-                    title = title,
-                    rewardPersonId = selectedParticipants.first(),
-                    rewardAmount = reward,
-                    participantIds = selectedParticipants,
-                    phases = phases.toList()
-                )
-                persist(state.copy(missions = state.missions + mission))
-                dialog.dismiss()
+                val selectedParticipants = people.zip(participantChecks).filter { it.second.isChecked }.map { it.first.id }
+                if (title.isBlank()) { showErr(strings.toastInformName); return@setOnClickListener }
+                if (reward <= 0) { showErr(strings.toastAmountGreaterZero); return@setOnClickListener }
+                if (selectedParticipants.isEmpty()) { showErr(strings.toastNoPeopleAvailable); return@setOnClickListener }
+                if (phases.isEmpty()) { showErr(strings.btnAddPhaseInDialog); return@setOnClickListener }
+                val mission = Mission(title = title, rewardPersonId = selectedParticipants.first(), rewardAmount = reward, participantIds = selectedParticipants, phases = phases.toList())
+                persist(state.copy(missions = state.missions + mission)); dialog.dismiss()
             }
         }
         dialog.show()
@@ -1082,21 +932,16 @@ class MainActivity : Activity() {
 
     private fun showMissionPhaseDialog(mission: Mission) {
         val layout = dialogLayout()
-        val titleInput = edit("Nome da fase", "")
+        val titleInput = edit(strings.hintPhaseName, "")
         layout.addView(titleInput)
         AlertDialog.Builder(this)
-            .setTitle("Nova fase")
+            .setTitle(strings.btnAddPhase)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Salvar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave) { _, _ ->
                 val title = titleInput.text.toString().trim()
-                if (title.isBlank()) {
-                    toast("Informe um nome.")
-                    return@setPositiveButton
-                }
-                val updatedMissions = state.missions.map {
-                    if (it.id == mission.id) it.copy(phases = it.phases + MissionPhase(title = title)) else it
-                }
+                if (title.isBlank()) { toast(strings.toastInformName); return@setPositiveButton }
+                val updatedMissions = state.missions.map { if (it.id == mission.id) it.copy(phases = it.phases + MissionPhase(title = title)) else it }
                 persist(state.copy(missions = updatedMissions))
             }
             .show()
@@ -1104,24 +949,16 @@ class MainActivity : Activity() {
 
     private fun showAddMissionParticipantDialog(mission: Mission) {
         val candidates = state.people.filterNot { it.archived || it.id in mission.participantIds }
-        if (candidates.isEmpty()) {
-            toast("Nao ha pessoas disponiveis para associar.")
-            return
-        }
+        if (candidates.isEmpty()) { toast(strings.toastNoPeopleAvailable); return }
         val personSpinner = spinner(candidates.map { it.name })
-        val layout = dialogLayout().apply {
-            addView(label("Pessoa"))
-            addView(personSpinner)
-        }
+        val layout = dialogLayout().apply { addView(label(strings.labelPerson)); addView(personSpinner) }
         AlertDialog.Builder(this)
-            .setTitle("Associar pessoa")
+            .setTitle(strings.btnAssociatePerson)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Associar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnAssociate) { _, _ ->
                 val person = candidates[personSpinner.selectedItemPosition]
-                val updatedMissions = state.missions.map {
-                    if (it.id == mission.id) it.copy(participantIds = it.participantIds + person.id) else it
-                }
+                val updatedMissions = state.missions.map { if (it.id == mission.id) it.copy(participantIds = it.participantIds + person.id) else it }
                 persist(state.copy(missions = updatedMissions))
             }
             .show()
@@ -1131,19 +968,14 @@ class MainActivity : Activity() {
         val participants = mission.participantIds.mapNotNull { id -> state.people.firstOrNull { it.id == id } }
         if (participants.isEmpty()) return
         val personSpinner = spinner(participants.map { it.name })
-        val layout = dialogLayout().apply {
-            addView(label("Pessoa"))
-            addView(personSpinner)
-        }
+        val layout = dialogLayout().apply { addView(label(strings.labelPerson)); addView(personSpinner) }
         AlertDialog.Builder(this)
-            .setTitle("Desassociar pessoa")
+            .setTitle(strings.btnRemovePerson)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Desassociar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnDisassociate) { _, _ ->
                 val person = participants[personSpinner.selectedItemPosition]
-                val updatedMissions = state.missions.map {
-                    if (it.id == mission.id) it.copy(participantIds = it.participantIds.filterNot { id -> id == person.id }) else it
-                }
+                val updatedMissions = state.missions.map { if (it.id == mission.id) it.copy(participantIds = it.participantIds.filterNot { id -> id == person.id }) else it }
                 persist(state.copy(missions = updatedMissions))
             }
             .show()
@@ -1151,20 +983,20 @@ class MainActivity : Activity() {
 
     private fun confirmDeleteMission(missionId: String, missionTitle: String) {
         AlertDialog.Builder(this)
-            .setTitle("Excluir missão")
-            .setMessage("Deseja excluir \"$missionTitle\"? Esta ação não pode ser desfeita.")
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Excluir") { _, _ ->
+            .setTitle(strings.btnDeleteMission)
+            .setMessage(String.format(strings.confirmDeleteMission, missionTitle))
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnDeleteMission) { _, _ ->
                 persist(state.copy(missions = state.missions.filterNot { it.id == missionId }))
-                toast("Missão excluída.")
+                toast(strings.toastMissionDeleted)
             }
             .show()
     }
 
     private fun showTransactionTypeChooser() {
         AlertDialog.Builder(this)
-            .setTitle("Movimentar saldo")
-            .setItems(arrayOf("Adicionar saldo", "Executar saque", "Remover por penalidade")) { _, which ->
+            .setTitle(strings.titleMoveBalance)
+            .setItems(arrayOf(strings.optAddBalance, strings.optWithdraw, strings.optPenalize)) { _, which ->
                 when (which) {
                     0 -> showTransactionDialog(TransactionType.DEPOSIT)
                     1 -> showTransactionDialog(TransactionType.WITHDRAW)
@@ -1174,48 +1006,30 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun showTransactionDialog(
-        defaultType: TransactionType = TransactionType.DEPOSIT,
-        defaultPersonId: String? = null
-    ) {
+    private fun showTransactionDialog(defaultType: TransactionType = TransactionType.DEPOSIT, defaultPersonId: String? = null) {
         val people = state.people.filterNot { it.archived }
-        if (people.isEmpty()) {
-            toast("Cadastre uma pessoa primeiro.")
-            return
-        }
+        if (people.isEmpty()) { toast(strings.toastInformName); return }
         var inputInReais = false
         val layout = dialogLayout()
         val personSpinner = spinner(people.map { it.name })
-        val typeSpinner = spinner(TransactionType.entries.map { it.label })
-        val amountInput = edit("Quantidade de pontos", "").apply {
+        val typeSpinner = spinner(TransactionType.entries.map { txTypeLabel(it) })
+        val amountInput = edit(strings.hintAmountPoints, "").apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
         val reasonInput = when (defaultType) {
-            TransactionType.PENALTY -> edit("Ex: Brigou com o irmão...", "")
-            TransactionType.WITHDRAW -> edit("Ex: Comprou um brinquedo...", "")
-            TransactionType.DEPOSIT -> edit("Ex: Ajudou em casa, terminou tarefa...", "")
-            TransactionType.DAILY_ALLOWANCE -> edit("Ex: Mesada diária", "")
+            TransactionType.PENALTY -> edit(strings.optPenalize, "")
+            TransactionType.WITHDRAW -> edit(strings.optWithdraw, "")
+            TransactionType.DEPOSIT -> edit(strings.optAddBalance, "")
+            TransactionType.DAILY_ALLOWANCE -> edit(strings.typeDailyAllowance, "")
         }
-        val ptBtn = TextView(this).apply {
-            text = "Pontos"
-            gravity = Gravity.CENTER
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f)
-        }
-        val brlBtn = TextView(this).apply {
-            text = "Reais (R$)"
-            gravity = Gravity.CENTER
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f)
-        }
+        val ptBtn = TextView(this).apply { text = strings.unitPoints; gravity = Gravity.CENTER; textSize = 13f; typeface = Typeface.DEFAULT_BOLD }
+        val brlBtn = TextView(this).apply { text = strings.unitBRL; gravity = Gravity.CENTER; textSize = 13f; typeface = Typeface.DEFAULT_BOLD }
         fun refreshToggle() {
             ptBtn.background = roundedDrawable(if (!inputInReais) COLOR_ORANGE_PRI else COLOR_ORANGE_SOFT, 20f)
             ptBtn.setTextColor(if (!inputInReais) Color.WHITE else COLOR_ORANGE_PRI)
             brlBtn.background = roundedDrawable(if (inputInReais) COLOR_ORANGE_PRI else COLOR_ORANGE_SOFT, 20f)
             brlBtn.setTextColor(if (inputInReais) Color.WHITE else COLOR_ORANGE_PRI)
-            amountInput.hint = if (inputInReais) "Valor em reais (ex: 1.50)" else "Quantidade de pontos"
+            amountInput.hint = if (inputInReais) strings.hintAmountBRL else strings.hintAmountPoints
         }
         ptBtn.setOnClickListener { inputInReais = false; refreshToggle() }
         brlBtn.setOnClickListener { inputInReais = true; refreshToggle() }
@@ -1224,49 +1038,27 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             addView(ptBtn, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
             addView(brlBtn, LinearLayout.LayoutParams(0, dp(40), 1f))
-            layoutParams = LinearLayout.LayoutParams(-1, dp(40)).apply {
-                topMargin = dp(6)
-                bottomMargin = dp(6)
-            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(40)).apply { topMargin = dp(6); bottomMargin = dp(6) }
         }
         defaultPersonId?.let { id ->
-            val personIndex = people.indexOfFirst { it.id == id }
-            if (personIndex >= 0) personSpinner.setSelection(personIndex)
+            val idx = people.indexOfFirst { it.id == id }
+            if (idx >= 0) personSpinner.setSelection(idx)
         }
         typeSpinner.setSelection(TransactionType.entries.indexOf(defaultType).coerceAtLeast(0))
-        layout.addView(label("Pessoa"))
-        layout.addView(personSpinner)
-        layout.addView(label("Tipo"))
-        layout.addView(typeSpinner)
-        layout.addView(label("Unidade"))
-        layout.addView(toggleRow)
-        layout.addView(amountInput)
-        layout.addView(reasonInput)
+        layout.addView(label(strings.labelPerson)); layout.addView(personSpinner)
+        layout.addView(label(strings.labelType)); layout.addView(typeSpinner)
+        layout.addView(label(strings.labelUnit)); layout.addView(toggleRow)
+        layout.addView(amountInput); layout.addView(reasonInput)
         AlertDialog.Builder(this)
-            .setTitle("Nova movimentação")
+            .setTitle(strings.titleNewMovement)
             .setView(layout)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Salvar") { _, _ ->
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnSave) { _, _ ->
                 val rawValue = amountInput.text.toString().replace(',', '.').toDoubleOrNull() ?: 0.0
-                val amountInPoints = if (inputInReais) {
-                    val pointRate = state.pointValueCents / 100.0
-                    Math.round(rawValue / pointRate * 100) / 100.0
-                } else {
-                    rawValue
-                }
+                val amountInPoints = if (inputInReais) Math.round(rawValue / (state.pointValueCents / 100.0) * 100) / 100.0 else rawValue
                 val reason = reasonInput.text.toString().trim()
-                try {
-                    balances.validate(amountInPoints, reason)
-                } catch (error: IllegalArgumentException) {
-                    toast(error.message ?: "Dados invalidos.")
-                    return@setPositiveButton
-                }
-                val tx = RewardTransaction(
-                    personId = people[personSpinner.selectedItemPosition].id,
-                    type = TransactionType.entries[typeSpinner.selectedItemPosition],
-                    amount = amountInPoints,
-                    reason = reason
-                )
+                try { balances.validate(amountInPoints, reason) } catch (e: IllegalArgumentException) { toast(e.message ?: strings.toastInformAmount); return@setPositiveButton }
+                val tx = RewardTransaction(personId = people[personSpinner.selectedItemPosition].id, type = TransactionType.entries[typeSpinner.selectedItemPosition], amount = amountInPoints, reason = reason)
                 persist(state.copy(transactions = state.transactions + tx))
             }
             .show()
@@ -1274,30 +1066,21 @@ class MainActivity : Activity() {
 
     private fun reversePenalty(tx: RewardTransaction, person: Person) {
         AlertDialog.Builder(this)
-            .setTitle("Reverter penalidade")
-            .setMessage("Devolver ${tx.amount} pontos para ${person.name}?\n\n\"${tx.reason}\"")
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Reverter") { _, _ ->
-                val refund = RewardTransaction(
-                    personId = tx.personId,
-                    type = TransactionType.DEPOSIT,
-                    amount = tx.amount,
-                    reason = "Estorno: ${tx.reason}",
-                    createdAt = LocalDate.now()
-                )
-                val updated = state.transactions.map { t ->
-                    if (t.id == tx.id) t.copy(reversed = true) else t
-                } + refund
+            .setTitle(strings.btnReversePenalty)
+            .setMessage(String.format(strings.confirmReversePenalty, tx.amount.formatPoints(), person.name, tx.reason))
+            .setNegativeButton(strings.btnCancel, null)
+            .setPositiveButton(strings.btnRevert) { _, _ ->
+                val refund = RewardTransaction(personId = tx.personId, type = TransactionType.DEPOSIT, amount = tx.amount, reason = "${strings.reversalPrefix}${tx.reason}", createdAt = LocalDate.now())
+                val updated = state.transactions.map { t -> if (t.id == tx.id) t.copy(reversed = true) else t } + refund
                 persist(state.copy(transactions = updated))
-                toast("Penalidade estornada.")
+                toast(strings.toastPenaltyReverted)
                 showPersonStatementDialog(person)
             }
             .show()
     }
 
     private fun showPersonStatementDialog(person: Person) {
-        val transactions = state.transactions
-            .filter { it.personId == person.id }
+        val transactions = state.transactions.filter { it.personId == person.id }
             .sortedWith(compareByDescending<RewardTransaction> { it.createdAt }.thenByDescending { it.id })
         val balance = balances.balanceFor(person.id, state.transactions)
         val layout = LinearLayout(this).apply {
@@ -1305,45 +1088,25 @@ class MainActivity : Activity() {
             setPadding(dp(18), dp(16), dp(18), dp(8))
             background = roundedDrawable(COLOR_PANEL, 20f)
         }
-        layout.addView(text("Extrato", 26, true).apply {
-            setTextColor(COLOR_INK)
-        })
-        layout.addView(text(person.name, 14, true).apply {
-            setTextColor(COLOR_MUTED)
-            setPadding(0, 0, 0, dp(12))
-        })
+        layout.addView(text(strings.titleStatement, 26, true).apply { setTextColor(COLOR_INK) })
+        layout.addView(text(person.name, 14, true).apply { setTextColor(COLOR_MUTED); setPadding(0, 0, 0, dp(12)) })
         layout.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = roundedDrawable(Color.WHITE, 16f, 1, COLOR_BORDER)
             elevation = dp(2).toFloat()
             setPadding(dp(14), dp(12), dp(14), dp(12))
-            addView(text("Saldo atual", 13, true).apply {
-                setTextColor(COLOR_MUTED)
-            })
-            addView(text("${balance.formatPoints()} pontos", 28, true).apply {
-                setTextColor(if (balance >= 0) COLOR_GREEN else COLOR_RED)
-            })
-        }, LinearLayout.LayoutParams(-1, -2).apply {
-            setMargins(0, 0, 0, dp(14))
-        })
-        layout.addView(text("Movimentacoes", 17, true).apply {
-            setPadding(0, 0, 0, dp(8))
-        })
+            addView(text(strings.labelCurrentBalance, 13, true).apply { setTextColor(COLOR_MUTED) })
+            addView(text("${balance.formatPoints()} pts", 28, true).apply { setTextColor(if (balance >= 0) COLOR_GREEN else COLOR_RED) })
+            addView(text(formatReais(balance, state.pointValueCents), 15, true).apply { setTextColor(COLOR_GREEN) })
+        }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(14)) })
+        layout.addView(text(strings.labelMovements, 17, true).apply { setPadding(0, 0, 0, dp(8)) })
         if (transactions.isEmpty()) {
-            layout.addView(text("Nenhuma movimentacao ainda", 15, false).apply {
-                gravity = Gravity.CENTER
-                setTextColor(COLOR_MUTED)
-                setPadding(0, dp(22), 0, dp(22))
-            })
+            layout.addView(text(strings.noMovements, 15, false).apply { gravity = Gravity.CENTER; setTextColor(COLOR_MUTED); setPadding(0, dp(22), 0, dp(22)) })
         } else {
             transactions.forEach { tx ->
                 val signed = tx.amount * tx.type.sign
                 val isReversedPenalty = tx.type == TransactionType.PENALTY && tx.reversed
-                val borderColor = when {
-                    isReversedPenalty -> COLOR_MUTED
-                    signed >= 0 -> COLOR_GREEN
-                    else -> COLOR_RED
-                }
+                val borderColor = when { isReversedPenalty -> COLOR_MUTED; signed >= 0 -> COLOR_GREEN; else -> COLOR_RED }
                 val txRow = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     background = roundedDrawable(Color.WHITE, 14f, 1, borderColor)
@@ -1356,9 +1119,7 @@ class MainActivity : Activity() {
                             addView(text(tx.reason, 15, true).apply {
                                 if (isReversedPenalty) paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
                             })
-                            addView(text("${tx.createdAt} | ${tx.type.label}${if (isReversedPenalty) " · Estornada" else ""}", 12, false).apply {
-                                setTextColor(COLOR_MUTED)
-                            })
+                            addView(text("${tx.createdAt} | ${txTypeLabel(tx.type)}${if (isReversedPenalty) " · ${strings.labelReversed}" else ""}", 12, false).apply { setTextColor(COLOR_MUTED) })
                         }, LinearLayout.LayoutParams(0, -2, 1f))
                         addView(LinearLayout(context).apply {
                             orientation = LinearLayout.VERTICAL
@@ -1367,15 +1128,12 @@ class MainActivity : Activity() {
                                 gravity = Gravity.END
                                 setTextColor(if (isReversedPenalty) COLOR_MUTED else if (signed >= 0) COLOR_GREEN else COLOR_RED)
                             })
-                            addView(text(formatReais(signed, state.pointValueCents), 11, false).apply {
-                                gravity = Gravity.END
-                                setTextColor(COLOR_MUTED)
-                            })
+                            addView(text(formatReais(signed, state.pointValueCents), 11, false).apply { gravity = Gravity.END; setTextColor(COLOR_MUTED) })
                         })
                     })
                     if (tx.type == TransactionType.PENALTY && !tx.reversed) {
                         addView(TextView(context).apply {
-                            text = "Reverter penalidade"
+                            text = strings.btnReversePenalty
                             textSize = 12f
                             typeface = Typeface.DEFAULT_BOLD
                             setTextColor(COLOR_BLUE)
@@ -1384,145 +1142,100 @@ class MainActivity : Activity() {
                         })
                     }
                 }
-                layout.addView(txRow, LinearLayout.LayoutParams(-1, -2).apply {
-                    setMargins(0, 0, 0, dp(8))
-                })
+                layout.addView(txRow, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(8)) })
             }
         }
         layout.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, 0)
-            addView(primaryButton("Adicionar saldo") {
-                showTransactionDialog(TransactionType.DEPOSIT, person.id)
-            }, LinearLayout.LayoutParams(-1, dp(48)))
+            addView(primaryButton(strings.btnAddBalance) { showTransactionDialog(TransactionType.DEPOSIT, person.id) }, LinearLayout.LayoutParams(-1, dp(48)))
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
-                addView(secondaryButton("Saque") {
-                    showTransactionDialog(TransactionType.WITHDRAW, person.id)
-                }, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                    setMargins(0, dp(8), dp(8), 0)
-                })
-                addView(secondaryButton("Penalizar") {
-                    showTransactionDialog(TransactionType.PENALTY, person.id)
-                }, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                    setMargins(0, dp(8), 0, 0)
-                })
+                addView(secondaryButton(strings.btnWithdraw) { showTransactionDialog(TransactionType.WITHDRAW, person.id) }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(0, dp(8), dp(8), 0) })
+                addView(secondaryButton(strings.btnPenalize) { showTransactionDialog(TransactionType.PENALTY, person.id) }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(0, dp(8), 0, 0) })
             })
         })
         AlertDialog.Builder(this)
             .setView(ScrollView(this).apply { addView(layout) })
-            .setPositiveButton("Fechar", null)
+            .setPositiveButton(strings.btnClose, null)
             .show()
     }
 
     private fun invertFutureAssignments(taskId: String) {
-        val updatedTasks = state.tasks.map { task ->
-            if (task.id == taskId) {
-                task.copy(rotationOffset = task.rotationOffset + 1)
-            } else {
-                task
-            }
-        }
-        persist(state.copy(tasks = updatedTasks))
-        toast("Sequência invertida para os próximos períodos.")
+        persist(state.copy(tasks = state.tasks.map { if (it.id == taskId) it.copy(rotationOffset = it.rotationOffset + 1) else it }))
+        toast(strings.toastSequenceInverted)
     }
 
     private fun toggleMissionPhase(missionId: String, phaseId: String, checked: Boolean) {
         val updatedMissions = state.missions.map { mission ->
             if (mission.id == missionId && !mission.isCompleted()) {
-                mission.copy(phases = mission.phases.map { phase ->
-                    if (phase.id == phaseId) phase.copy(checked = checked) else phase
-                })
-            } else {
-                mission
-            }
+                mission.copy(phases = mission.phases.map { phase -> if (phase.id == phaseId) phase.copy(checked = checked) else phase })
+            } else mission
         }
         persist(state.copy(missions = updatedMissions))
     }
 
     private fun completeMission(missionId: String) {
         val mission = state.missions.firstOrNull { it.id == missionId } ?: return
-        if (mission.isCompleted()) {
-            toast("Missao ja concluida.")
-            return
-        }
-        if (!mission.isReadyToComplete()) {
-            toast("Marque todas as fases antes de concluir.")
-            return
-        }
-        val recipientIds = mission.participantIds.ifEmpty {
-            listOf(mission.rewardPersonId).filter { it.isNotBlank() }
-        }
-        if (recipientIds.isEmpty()) {
-            toast("A missao nao tem participantes.")
-            return
-        }
+        if (mission.isCompleted()) { toast(strings.toastMissionConcluded); return }
+        if (!mission.isReadyToComplete()) { toast(strings.toastAllPhases); return }
+        val recipientIds = mission.participantIds.ifEmpty { listOf(mission.rewardPersonId).filter { it.isNotBlank() } }
+        if (recipientIds.isEmpty()) { toast(strings.toastNoParticipants); return }
         val transactions = recipientIds.map { personId ->
-            RewardTransaction(
-                personId = personId,
-                type = TransactionType.DEPOSIT,
-                amount = mission.rewardAmount.toDouble(),
-                reason = "Missao concluida: ${mission.title}"
-            )
+            RewardTransaction(personId = personId, type = TransactionType.DEPOSIT, amount = mission.rewardAmount.toDouble(), reason = "Missao concluida: ${mission.title}")
         }
-        val updatedMissions = state.missions.map {
-            if (it.id == mission.id) {
-                it.copy(completedAt = LocalDate.now(), rewardTransactionId = transactions.first().id)
-            } else {
-                it
-            }
-        }
+        val updatedMissions = state.missions.map { if (it.id == mission.id) it.copy(completedAt = LocalDate.now(), rewardTransactionId = transactions.first().id) else it }
         persist(state.copy(missions = updatedMissions, transactions = state.transactions + transactions))
-        toast("Recompensa creditada.")
+        toast(strings.toastRewardCredited)
     }
 
     private fun chooseExportFile() {
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
             putExtra(Intent.EXTRA_TITLE, "joao-e-pedro-tasks-backup.json")
-        }
-        startActivityForResult(intent, EXPORT_REQUEST)
+        }, EXPORT_REQUEST)
     }
 
     private fun chooseImportFile() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/json"
-        }
-        startActivityForResult(intent, IMPORT_REQUEST)
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
+        }, IMPORT_REQUEST)
     }
 
     private fun exportTo(uri: Uri) {
         runCatching {
-            contentResolver.openOutputStream(uri)?.use { stream ->
-                stream.write(repository.exportText(state).toByteArray())
-            } ?: error("Não foi possível abrir o arquivo.")
-        }.onSuccess {
-            toast("Backup exportado.")
-        }.onFailure {
-            toast("Falha ao exportar: ${it.message}")
-        }
+            contentResolver.openOutputStream(uri)?.use { it.write(repository.exportText(state).toByteArray()) } ?: error("Cannot open file.")
+        }.onSuccess { toast(strings.toastBackupExported) }.onFailure { toast(strings.toastInformAmount) }
     }
 
     private fun importFrom(uri: Uri) {
         runCatching {
-            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?: error("Não foi possível ler o arquivo.")
+            val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: error("Cannot read file.")
             repository.importText(text)
-        }.onSuccess {
-            state = it
-            render()
-            toast("Backup restaurado.")
-        }.onFailure {
-            toast("Arquivo invalido: ${it.message}")
-        }
+        }.onSuccess { state = it; render(); toast(strings.toastBackupRestored) }
+         .onFailure { toast("${strings.toastInformAmount}: ${it.message}") }
     }
 
-    private fun persist(newState: AppState) {
-        state = newState
-        repository.save(state)
-        render()
+    private fun persist(newState: AppState) { state = newState; repository.save(state); render() }
+
+    private fun periodicityLabel(p: Periodicity) = when (p) {
+        Periodicity.DAILY -> strings.periodicityDaily
+        Periodicity.WEEKLY -> strings.periodicityWeekly
+        Periodicity.MONTHLY -> strings.periodicityMonthly
+    }
+
+    private fun txTypeLabel(t: TransactionType) = when (t) {
+        TransactionType.DEPOSIT -> strings.typeDeposit
+        TransactionType.WITHDRAW -> strings.typeWithdraw
+        TransactionType.PENALTY -> strings.typePenalty
+        TransactionType.DAILY_ALLOWANCE -> strings.typeDailyAllowance
+    }
+
+    private fun languageName(lang: String) = when (lang) { "es" -> "Español"; "en" -> "English"; else -> "Português" }
+
+    private fun formatReais(points: Double, pointValueCents: Int): String {
+        val total = points * pointValueCents / 100.0
+        return String.format(java.util.Locale("pt", "BR"), "R$ %.2f", total)
     }
 
     private fun card(build: LinearLayout.() -> Unit): View {
@@ -1543,34 +1256,20 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun sectionTitle(value: String): TextView = text(value, 24, true).apply {
-        setPadding(0, dp(4), 0, dp(12))
-    }
-
-    private fun empty(value: String): TextView = text(value, 16, false).apply {
-        setTextColor(COLOR_MUTED)
-    }
-
-    private fun label(value: String): TextView = text(value, 13, true).apply {
-        setPadding(0, dp(10), 0, dp(4))
-    }
+    private fun sectionTitle(value: String): TextView = text(value, 24, true).apply { setPadding(0, dp(4), 0, dp(12)) }
+    private fun empty(value: String): TextView = text(value, 16, false).apply { setTextColor(COLOR_MUTED) }
+    private fun label(value: String): TextView = text(value, 13, true).apply { setPadding(0, dp(10), 0, dp(4)) }
 
     private fun text(value: String, size: Int, bold: Boolean): TextView {
         return TextView(this).apply {
-            text = value
-            textSize = size.toFloat()
-            setTextColor(COLOR_INK)
+            text = value; textSize = size.toFloat(); setTextColor(COLOR_INK)
             if (bold) typeface = Typeface.DEFAULT_BOLD
             setLineSpacing(0f, 1.08f)
         }
     }
 
     private fun edit(hintValue: String, defaultValue: String): EditText {
-        return EditText(this).apply {
-            hint = hintValue
-            setText(defaultValue)
-            setSingleLine(false)
-        }
+        return EditText(this).apply { hint = hintValue; setText(defaultValue); setSingleLine(false) }
     }
 
     private fun spinner(items: List<String>): Spinner {
@@ -1584,10 +1283,7 @@ class MainActivity : Activity() {
     }
 
     private fun dialogLayout(): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(4), dp(8), 0)
-        }
+        return LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(4), dp(8), 0) }
     }
 
     private fun friendlyDialogLayout(title: String, subtitle: String): LinearLayout {
@@ -1595,75 +1291,42 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             background = roundedDrawable(COLOR_PANEL, 20f)
             setPadding(dp(18), dp(16), dp(18), dp(12))
-            addView(text(title, 24, true).apply {
-                setTextColor(COLOR_INK)
-            })
-            addView(text(subtitle, 14, false).apply {
-                setTextColor(COLOR_MUTED)
-                setPadding(0, dp(2), 0, dp(14))
-            })
+            addView(text(title, 24, true).apply { setTextColor(COLOR_INK) })
+            addView(text(subtitle, 14, false).apply { setTextColor(COLOR_MUTED); setPadding(0, dp(2), 0, dp(14)) })
         }
     }
 
     private fun stackedButton(value: String, primary: Boolean, onClick: () -> Unit): TextView {
         return TextView(this).apply {
-            text = value
-            gravity = Gravity.CENTER
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
+            text = value; gravity = Gravity.CENTER; textSize = 14f; typeface = Typeface.DEFAULT_BOLD
             setTextColor(if (primary) COLOR_INK else COLOR_ORANGE_PRI)
-            background = roundedDrawable(
-                if (primary) COLOR_AMBER else Color.WHITE,
-                18f,
-                if (primary) 0 else 2,
-                COLOR_ORANGE_PRI
-            )
+            background = roundedDrawable(if (primary) COLOR_AMBER else Color.WHITE, 18f, if (primary) 0 else 2, COLOR_ORANGE_PRI)
             setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(-1, dp(48)).apply {
-                setMargins(0, dp(12), 0, 0)
-            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(48)).apply { setMargins(0, dp(12), 0, 0) }
         }
     }
 
     private fun primaryButton(value: String, onClick: () -> Unit): Button {
         return Button(this).apply {
-            text = value
-            isAllCaps = false
-            setTextColor(COLOR_INK)
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            background = roundedDrawable(COLOR_AMBER, 24f)
-            elevation = dp(3).toFloat()
-            setPadding(dp(16), 0, dp(16), 0)
-            setOnClickListener { onClick() }
+            text = value; isAllCaps = false; setTextColor(COLOR_INK); textSize = 14f; typeface = Typeface.DEFAULT_BOLD
+            background = roundedDrawable(COLOR_AMBER, 24f); elevation = dp(3).toFloat()
+            setPadding(dp(16), 0, dp(16), 0); setOnClickListener { onClick() }
         }
     }
 
     private fun secondaryButton(value: String, onClick: () -> Unit): TextView {
         return TextView(this).apply {
-            text = value
-            gravity = Gravity.CENTER
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
+            text = value; gravity = Gravity.CENTER; textSize = 14f; typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_ORANGE_PRI)
             background = roundedDrawable(Color.WHITE, 24f, 2, COLOR_ORANGE_PRI)
-            setPadding(dp(12), 0, dp(12), 0)
-            setOnClickListener { onClick() }
-            layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply {
-                setMargins(0, dp(14), 0, 0)
-            }
+            setPadding(dp(12), 0, dp(12), 0); setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply { setMargins(0, dp(14), 0, 0) }
         }
     }
 
-    private fun roundedDrawable(
-        color: Int,
-        radiusDp: Float,
-        strokeWidthDp: Int = 0,
-        strokeColor: Int = Color.TRANSPARENT
-    ): GradientDrawable {
+    private fun roundedDrawable(color: Int, radiusDp: Float, strokeWidthDp: Int = 0, strokeColor: Int = Color.TRANSPARENT): GradientDrawable {
         return GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            setColor(color)
+            shape = GradientDrawable.RECTANGLE; setColor(color)
             cornerRadius = dp(radiusDp.toInt()).toFloat()
             if (strokeWidthDp > 0) setStroke(dp(strokeWidthDp), strokeColor)
         }
@@ -1676,12 +1339,7 @@ class MainActivity : Activity() {
                 target.setPadding(left + bars.left, top + bars.top, right + bars.right, bottom + bars.bottom)
             } else {
                 @Suppress("DEPRECATION")
-                target.setPadding(
-                    left + insets.systemWindowInsetLeft,
-                    top + insets.systemWindowInsetTop,
-                    right + insets.systemWindowInsetRight,
-                    bottom + insets.systemWindowInsetBottom
-                )
+                target.setPadding(left + insets.systemWindowInsetLeft, top + insets.systemWindowInsetTop, right + insets.systemWindowInsetRight, bottom + insets.systemWindowInsetBottom)
             }
             insets
         }
@@ -1689,9 +1347,7 @@ class MainActivity : Activity() {
     }
 
     private fun View.withMargins(bottom: Int): View {
-        layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-            setMargins(0, 0, 0, dp(bottom))
-        }
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, dp(bottom)) }
         return this
     }
 
@@ -1700,55 +1356,37 @@ class MainActivity : Activity() {
         return s.trimEnd('0').trimEnd('.')
     }
 
-    private fun Double.formatSigned(): String {
-        val f = formatPoints()
-        return if (this > 0) "+$f" else f
-    }
-
+    private fun Double.formatSigned(): String { val f = formatPoints(); return if (this > 0) "+$f" else f }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private enum class Tab(val label: String) {
-        Today("Hoje"),
-        People("Pessoas"),
-        Tasks("Atividades"),
-        Missions("Missoes"),
-        Rewards("Recompensas"),
-        Data("Ajuda")
-    }
-
-    private fun calcAge(birthDate: LocalDate): Int =
-        java.time.Period.between(birthDate, LocalDate.now()).years
+    private enum class Tab { Today, People, Tasks, Missions, Rewards, Data }
+    private fun calcAge(birthDate: LocalDate): Int = java.time.Period.between(birthDate, LocalDate.now()).years
 
     private companion object {
-        const val EXPORT_REQUEST          = 1101
-        const val IMPORT_REQUEST          = 1102
-        const val PHOTO_REQUEST           = 1103
-        const val CAMERA_REQUEST          = 1104
+        const val EXPORT_REQUEST           = 1101
+        const val IMPORT_REQUEST           = 1102
+        const val PHOTO_REQUEST            = 1103
+        const val CAMERA_REQUEST           = 1104
         const val CAMERA_PERMISSION_REQUEST = 1105
-        val COLOR_PAGE = Color.rgb(255, 255, 255)
-        val COLOR_INK = Color.rgb(38, 50, 56)
-        val COLOR_MUTED = Color.rgb(130, 130, 140)
-        val COLOR_BLUE = Color.rgb(77, 163, 255)
-        val COLOR_BLUE_SOFT = Color.rgb(229, 243, 255)
-        val COLOR_ORANGE_PRI = Color.rgb(255, 140, 66)
-        val COLOR_ORANGE_SOFT = Color.rgb(255, 236, 220)
-        val COLOR_AMBER = Color.rgb(255, 193, 7)
-        val COLOR_CORAL = Color.rgb(255, 138, 101)
-        val COLOR_CORAL_SOFT = Color.rgb(255, 236, 229)
-        val COLOR_GREEN = Color.rgb(76, 175, 80)
-        val COLOR_RED = Color.rgb(220, 38, 38)
-        val COLOR_YELLOW = Color.rgb(255, 213, 79)
-        val COLOR_HEADER = Color.rgb(255, 140, 66)
-        val COLOR_PANEL = Color.rgb(250, 250, 252)
-        val COLOR_ACCENT = Color.rgb(255, 140, 66)
-        val COLOR_ACCENT_SOFT = Color.rgb(255, 236, 220)
-        val COLOR_SOFT_SURFACE = Color.rgb(248, 246, 242)
-        val COLOR_BORDER = Color.rgb(230, 225, 218)
-        val COLOR_CARD_STROKE = Color.rgb(255, 220, 190)
-        val COLOR_DISABLED = Color.rgb(244, 241, 235)
+        val COLOR_PAGE         = Color.rgb(255, 255, 255)
+        val COLOR_INK          = Color.rgb(38, 50, 56)
+        val COLOR_MUTED        = Color.rgb(130, 130, 140)
+        val COLOR_BLUE         = Color.rgb(77, 163, 255)
+        val COLOR_BLUE_SOFT    = Color.rgb(229, 243, 255)
+        val COLOR_ORANGE_PRI   = Color.rgb(255, 140, 66)
+        val COLOR_ORANGE_SOFT  = Color.rgb(255, 236, 220)
+        val COLOR_AMBER        = Color.rgb(255, 193, 7)
+        val COLOR_CORAL        = Color.rgb(255, 138, 101)
+        val COLOR_CORAL_SOFT   = Color.rgb(255, 236, 229)
+        val COLOR_GREEN        = Color.rgb(76, 175, 80)
+        val COLOR_RED          = Color.rgb(220, 38, 38)
+        val COLOR_PANEL        = Color.rgb(250, 250, 252)
+        val COLOR_ACCENT       = Color.rgb(255, 140, 66)
+        val COLOR_BORDER       = Color.rgb(230, 225, 218)
+        val COLOR_CARD_STROKE  = Color.rgb(255, 220, 190)
+        val COLOR_DISABLED     = Color.rgb(244, 241, 235)
         val COLOR_DISABLED_STROKE = Color.rgb(229, 224, 216)
-        val COLOR_NAV_BG = Color.rgb(255, 255, 255)
+        val COLOR_NAV_BG       = Color.rgb(255, 255, 255)
     }
 }

@@ -78,7 +78,9 @@ data class AppState(
     val missions: List<Mission> = emptyList(),
     val transactions: List<RewardTransaction> = emptyList(),
     val dailyAllowance: DailyAllowanceConfig = DailyAllowanceConfig(),
-    val pointValueCents: Int = 33
+    val pointValueCents: Int = 33,
+    val language: String = "pt",
+    val biometricEnabled: Boolean = false
 ) {
     companion object {
         fun seeded(): AppState {

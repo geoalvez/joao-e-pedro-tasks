@@ -39,6 +39,9 @@ class AppRepository(context: Context) {
                     .put("name", person.name)
                     .put("archived", person.archived)
                     .put("createdAt", person.createdAt.toString())
+                    .put("birthDate", person.birthDate?.toString())
+                    .put("schoolYear", person.schoolYear)
+                    .put("photoUri", person.photoUri)
             }))
             .put("tasks", JSONArray(state.tasks.map { task ->
                 JSONObject()
@@ -91,7 +94,11 @@ class AppRepository(context: Context) {
                 name = item.getString("name"),
                 archived = item.optBoolean("archived", false),
                 createdAt = item.optString("createdAt").takeIf { it.isNotBlank() && it != "null" }
-                    ?.let { LocalDate.parse(it) } ?: LocalDate.now()
+                    ?.let { LocalDate.parse(it) } ?: LocalDate.now(),
+                birthDate = item.optString("birthDate").takeIf { it.isNotBlank() && it != "null" }
+                    ?.let { LocalDate.parse(it) },
+                schoolYear = item.optString("schoolYear").takeIf { it.isNotBlank() && it != "null" },
+                photoUri = item.optString("photoUri").takeIf { it.isNotBlank() && it != "null" }
             )
         }
         val tasks = root.optJSONArray("tasks").toList { item ->

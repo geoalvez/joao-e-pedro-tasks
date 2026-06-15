@@ -20,7 +20,10 @@ data class Person(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val archived: Boolean = false,
-    val createdAt: LocalDate = LocalDate.now()
+    val createdAt: LocalDate = LocalDate.now(),
+    val birthDate: LocalDate? = null,
+    val schoolYear: String? = null,
+    val photoUri: String? = null
 )
 
 data class ActivityTask(

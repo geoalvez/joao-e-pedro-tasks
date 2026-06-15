@@ -48,6 +48,7 @@ class MainActivity : Activity() {
     private val balances = RewardBalanceService()
     private lateinit var root: LinearLayout
     private var selectedTab = Tab.Today
+    private var pendingPhotoPersonId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +69,20 @@ class MainActivity : Activity() {
         when (requestCode) {
             EXPORT_REQUEST -> exportTo(data.data!!)
             IMPORT_REQUEST -> importFrom(data.data!!)
+            PHOTO_REQUEST -> {
+                val uri = data.data!!
+                runCatching {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                val personId = pendingPhotoPersonId ?: return
+                pendingPhotoPersonId = null
+                state = state.copy(people = state.people.map { p ->
+                    if (p.id == personId) p.copy(photoUri = uri.toString()) else p
+                })
+                repository.save(state)
+                render()
+                toast("Foto atualizada!")
+            }
         }
     }
 
@@ -150,12 +165,12 @@ class MainActivity : Activity() {
 
     private fun bottomNav(): View {
         val navItems = listOf(
-            Tab.Today    to ("🏠️" to "Início"),
-            Tab.People   to ("👨‍👩‍👦️" to "Família"),
-            Tab.Tasks    to ("✅️" to "Tarefas"),
-            Tab.Missions to ("🎯️" to "Missões"),
-            Tab.Rewards  to ("🎁️" to "Saldo"),
-            Tab.Data     to ("⚙️" to "Config")
+            Tab.Today    to (R.drawable.ic_nav_home     to "Início"),
+            Tab.People   to (R.drawable.ic_nav_family   to "Família"),
+            Tab.Tasks    to (R.drawable.ic_nav_tasks    to "Tarefas"),
+            Tab.Missions to (R.drawable.ic_nav_missions to "Missões"),
+            Tab.Rewards  to (R.drawable.ic_nav_rewards  to "Saldo"),
+            Tab.Data     to (R.drawable.ic_nav_config   to "Config")
         )
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -163,27 +178,30 @@ class MainActivity : Activity() {
             elevation = dp(12).toFloat()
             layoutParams = LinearLayout.LayoutParams(-1, dp(72))
             navItems.forEach { (tab, meta) ->
-                val (icon, label) = meta
+                val (iconRes, label) = meta
                 val isSelected = selectedTab == tab
+                val iconColor = if (isSelected) COLOR_ORANGE_PRI else COLOR_MUTED
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
                     layoutParams = LinearLayout.LayoutParams(0, -1, 1f)
                     if (isSelected) setBackgroundColor(COLOR_ORANGE_SOFT)
                     setOnClickListener { selectedTab = tab; render() }
-                    addView(TextView(context).apply {
-                        text = icon
-                        textSize = 24f
-                        gravity = Gravity.CENTER
-                        setPadding(0, dp(6), 0, 0)
+                    addView(ImageView(context).apply {
+                        setImageResource(iconRes)
+                        setColorFilter(iconColor)
+                        layoutParams = LinearLayout.LayoutParams(dp(26), dp(26)).apply {
+                            gravity = Gravity.CENTER_HORIZONTAL
+                            topMargin = dp(8)
+                        }
                     })
                     addView(TextView(context).apply {
                         text = label
                         textSize = 10f
                         gravity = Gravity.CENTER
-                        setTextColor(if (isSelected) COLOR_ORANGE_PRI else COLOR_MUTED)
+                        setTextColor(iconColor)
                         typeface = if (isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                        setPadding(0, dp(2), 0, dp(6))
+                        setPadding(0, dp(3), 0, dp(6))
                     })
                 })
             }
@@ -252,30 +270,54 @@ class MainActivity : Activity() {
                         marginStart = if (idx == 0) 0 else dp(8)
                         marginEnd = if (idx == pair.lastIndex) 0 else dp(8)
                     }
-                    addView(TextView(context).apply {
-                        text = person.name.first().toString().uppercase()
-                        textSize = 28f
-                        setTextColor(Color.WHITE)
-                        typeface = Typeface.DEFAULT_BOLD
-                        gravity = Gravity.CENTER
-                        background = GradientDrawable().apply {
-                            shape = GradientDrawable.OVAL
-                            setColor(avatarColor)
-                        }
-                        layoutParams = LinearLayout.LayoutParams(dp(72), dp(72)).apply {
-                            gravity = Gravity.CENTER_HORIZONTAL
-                            bottomMargin = dp(12)
-                        }
-                    })
-                    addView(text(person.name, 17, true).apply {
-                        gravity = Gravity.CENTER
-                    })
+                    val avatarLp = LinearLayout.LayoutParams(dp(72), dp(72)).apply {
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        bottomMargin = dp(12)
+                    }
+                    if (person.photoUri != null) {
+                        addView(ImageView(context).apply {
+                            layoutParams = avatarLp
+                            scaleType = ImageView.ScaleType.CENTER_CROP
+                            runCatching { setImageURI(android.net.Uri.parse(person.photoUri)) }
+                            clipToOutline = true
+                            outlineProvider = object : android.view.ViewOutlineProvider() {
+                                override fun getOutline(v: android.view.View, o: android.graphics.Outline) {
+                                    o.setOval(0, 0, v.width, v.height)
+                                }
+                            }
+                        })
+                    } else {
+                        addView(TextView(context).apply {
+                            text = person.name.first().toString().uppercase()
+                            textSize = 28f
+                            setTextColor(Color.WHITE)
+                            typeface = Typeface.DEFAULT_BOLD
+                            gravity = Gravity.CENTER
+                            background = GradientDrawable().apply {
+                                shape = GradientDrawable.OVAL
+                                setColor(avatarColor)
+                            }
+                            layoutParams = avatarLp
+                        })
+                    }
+                    addView(text(person.name, 17, true).apply { gravity = Gravity.CENTER })
+                    if (person.birthDate != null || person.schoolYear != null) {
+                        addView(text(
+                            listOfNotNull(person.schoolYear, person.birthDate?.let { calcAge(it) }?.let { "$it anos" }).joinToString(" · "),
+                            12, false
+                        ).apply {
+                            gravity = Gravity.CENTER
+                            setTextColor(COLOR_MUTED)
+                            setPadding(0, dp(2), 0, 0)
+                        })
+                    }
                     addView(text("⭐ $balance pts", 15, false).apply {
                         gravity = Gravity.CENTER
                         setTextColor(COLOR_ORANGE_PRI)
                         typeface = Typeface.DEFAULT_BOLD
                         setPadding(0, dp(4), 0, 0)
                     })
+                    setOnClickListener { showPersonProfileDialog(person) }
                 }
                 row.addView(personCard)
             }
@@ -609,26 +651,97 @@ class MainActivity : Activity() {
 
     private fun showPersonDialog() {
         val layout = dialogLayout()
-        val nameInput = edit("Nome da pessoa", "")
+        val nameInput = edit("Nome da criança", "")
+        val birthInput = edit("Data de nascimento (dd/mm/aaaa)", "")
+        val schoolInput = edit("Escolaridade (ex: 3º ano do Fundamental)", "")
+        layout.addView(label("Nome *"))
         layout.addView(nameInput)
+        layout.addView(label("Data de nascimento"))
+        layout.addView(birthInput)
+        layout.addView(label("Escolaridade"))
+        layout.addView(schoolInput)
         AlertDialog.Builder(this)
             .setTitle("Nova pessoa")
-            .setView(layout)
+            .setView(ScrollView(this).apply { addView(layout) })
             .setNegativeButton("Cancelar", null)
             .setPositiveButton("Salvar") { _, _ ->
                 val name = nameInput.text.toString().trim()
-                if (name.isBlank()) {
-                    toast("Informe um nome.")
-                    return@setPositiveButton
-                }
-                persist(state.copy(people = state.people + Person(name = name)))
+                if (name.isBlank()) { toast("Informe um nome."); return@setPositiveButton }
+                val birthDate = parseBirthDate(birthInput.text.toString().trim())
+                val schoolYear = schoolInput.text.toString().trim().takeIf { it.isNotBlank() }
+                persist(state.copy(people = state.people + Person(name = name, birthDate = birthDate, schoolYear = schoolYear)))
             }
             .show()
     }
 
+    private fun showPersonProfileDialog(person: Person) {
+        val layout = dialogLayout()
+        val nameInput = edit("Nome da criança", person.name)
+        val birthInput = edit("Data de nascimento (dd/mm/aaaa)", person.birthDate?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "")
+        val schoolInput = edit("Escolaridade (ex: 3º ano do Fundamental)", person.schoolYear ?: "")
+        val photoStatus = TextView(this).apply {
+            text = if (person.photoUri != null) "✓ Foto definida" else "Nenhuma foto selecionada"
+            textSize = 13f
+            setTextColor(if (person.photoUri != null) COLOR_GREEN else COLOR_MUTED)
+            setPadding(0, dp(4), 0, 0)
+        }
+        layout.addView(label("Nome *"))
+        layout.addView(nameInput)
+        layout.addView(label("Data de nascimento"))
+        layout.addView(birthInput)
+        layout.addView(label("Escolaridade"))
+        layout.addView(schoolInput)
+        layout.addView(label("Foto de perfil"))
+        layout.addView(photoStatus)
+        layout.addView(TextView(this).apply {
+            text = "📷  Escolher foto da galeria"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_ORANGE_PRI)
+            setPadding(0, dp(10), 0, dp(4))
+            setOnClickListener {
+                pendingPhotoPersonId = person.id
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/*"
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                }
+                startActivityForResult(intent, PHOTO_REQUEST)
+            }
+        })
+        val builder = AlertDialog.Builder(this)
+            .setTitle("Perfil — ${person.name}")
+            .setView(ScrollView(this).apply { addView(layout) })
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Salvar") { _, _ ->
+                val name = nameInput.text.toString().trim()
+                if (name.isBlank()) { toast("Informe um nome."); return@setPositiveButton }
+                val birthDate = parseBirthDate(birthInput.text.toString().trim())
+                val schoolYear = schoolInput.text.toString().trim().takeIf { it.isNotBlank() }
+                persist(state.copy(people = state.people.map { p ->
+                    if (p.id == person.id) p.copy(name = name, birthDate = birthDate, schoolYear = schoolYear) else p
+                }))
+            }
+        if (!person.archived) {
+            builder.setNeutralButton("Arquivar") { _, _ ->
+                persist(state.copy(people = state.people.map { p ->
+                    if (p.id == person.id) p.copy(archived = true) else p
+                }))
+            }
+        }
+        builder.show()
+    }
+
+    private fun parseBirthDate(text: String): java.time.LocalDate? {
+        if (text.isBlank()) return null
+        return runCatching {
+            java.time.LocalDate.parse(text, java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+        }.getOrNull()
+    }
+
     private fun showTaskDialog() {
         val layout = dialogLayout()
-        val titleInput = edit("Nome da atividade", "Tomar banho primeiro - turno do dia")
+        val titleInput = edit("Ex: Tomar banho, Arrumar o quarto...", "")
         val periodicitySpinner = spinner(Periodicity.entries.map { it.label })
         layout.addView(titleInput)
         layout.addView(label("Periodicidade"))
@@ -952,12 +1065,12 @@ class MainActivity : Activity() {
         val layout = dialogLayout()
         val personSpinner = spinner(people.map { it.name })
         val typeSpinner = spinner(TransactionType.entries.map { it.label })
-        val amountInput = edit("Valor em pontos", "10").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        val amountInput = edit("Quantidade de pontos", "").apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
         val reasonInput = when (defaultType) {
-            TransactionType.PENALTY -> edit("Penalidade por...", "")
-            TransactionType.WITHDRAW -> edit("Motivo do saque", "")
-            TransactionType.DEPOSIT -> edit("Motivo", "Ajudou em casa")
-            TransactionType.DAILY_ALLOWANCE -> edit("Motivo", "Mesada diária")
+            TransactionType.PENALTY -> edit("Ex: Brigou com o irmão...", "")
+            TransactionType.WITHDRAW -> edit("Ex: Comprou um brinquedo...", "")
+            TransactionType.DEPOSIT -> edit("Ex: Ajudou em casa, terminou tarefa...", "")
+            TransactionType.DAILY_ALLOWANCE -> edit("Ex: Mesada diária", "")
         }
         defaultPersonId?.let { id ->
             val personIndex = people.indexOfFirst { it.id == id }
@@ -1379,9 +1492,13 @@ class MainActivity : Activity() {
         Data("Ajuda")
     }
 
+    private fun calcAge(birthDate: LocalDate): Int =
+        java.time.Period.between(birthDate, LocalDate.now()).years
+
     private companion object {
         const val EXPORT_REQUEST = 1101
         const val IMPORT_REQUEST = 1102
+        const val PHOTO_REQUEST  = 1103
         val COLOR_PAGE = Color.rgb(255, 255, 255)
         val COLOR_INK = Color.rgb(38, 50, 56)
         val COLOR_MUTED = Color.rgb(130, 130, 140)

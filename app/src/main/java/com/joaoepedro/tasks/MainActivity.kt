@@ -796,7 +796,8 @@ class MainActivity : Activity() {
     }
 
     private fun applyDateMask(editText: EditText) {
-        editText.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        // TYPE_CLASS_PHONE shows numeric keyboard and accepts '/' inserted by the watcher
+        editText.inputType = android.text.InputType.TYPE_CLASS_PHONE
         editText.addTextChangedListener(object : android.text.TextWatcher {
             private var isUpdating = false
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -804,15 +805,17 @@ class MainActivity : Activity() {
             override fun afterTextChanged(s: android.text.Editable?) {
                 if (isUpdating || s == null) return
                 isUpdating = true
-                val digits = s.toString().filter { it.isDigit() }.take(8)
-                val formatted = StringBuilder()
-                digits.forEachIndexed { i, c ->
-                    if (i == 2 || i == 4) formatted.append('/')
-                    formatted.append(c)
+                val digits = s.filter { it.isDigit() }.take(8)
+                val formatted = buildString {
+                    digits.forEachIndexed { i, c ->
+                        if (i == 2 || i == 4) append('/')
+                        append(c)
+                    }
                 }
-                val result = formatted.toString()
-                s.replace(0, s.length, result)
-                editText.setSelection(result.length)
+                if (s.toString() != formatted) {
+                    s.replace(0, s.length, formatted)
+                }
+                editText.setSelection(minOf(formatted.length, editText.text?.length ?: 0))
                 isUpdating = false
             }
         })

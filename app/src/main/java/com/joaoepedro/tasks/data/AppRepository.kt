@@ -84,6 +84,7 @@ class AppRepository(context: Context) {
                 .put("enabledSince", state.dailyAllowance.enabledSince?.toString())
                 .put("lastProcessedDate", state.dailyAllowance.lastProcessedDate?.toString())
             )
+            .put("pointValueCents", state.pointValueCents)
             .toString(2)
     }
 
@@ -155,7 +156,8 @@ class AppRepository(context: Context) {
         } else {
             DailyAllowanceConfig()
         }
-        return AppState(people = people, tasks = tasks, missions = missions, transactions = transactions, dailyAllowance = dailyAllowance)
+        val pointValueCents = root.optInt("pointValueCents", 33)
+        return AppState(people = people, tasks = tasks, missions = missions, transactions = transactions, dailyAllowance = dailyAllowance, pointValueCents = pointValueCents)
     }
 }
 

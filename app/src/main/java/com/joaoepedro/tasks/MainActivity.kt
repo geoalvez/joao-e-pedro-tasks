@@ -454,6 +454,10 @@ class MainActivity : Activity() {
             val rewardCard = card {
                 addView(text(person.name, 18, true))
                 addView(text("Saldo: $balance pontos", 22, true).apply { setTextColor(COLOR_ACCENT) })
+                addView(text(formatReais(balance, state.pointValueCents), 15, true).apply {
+                    setTextColor(COLOR_GREEN)
+                    setPadding(0, dp(2), 0, dp(4))
+                })
                 state.transactions
                     .filter { it.personId == person.id }
                     .sortedByDescending { it.createdAt }
@@ -476,6 +480,11 @@ class MainActivity : Activity() {
         content.addView(sectionTitle("Ajuda"))
         val config = state.dailyAllowance
         content.addView(card {
+            addView(text("Valor do ponto", 18, true))
+            addView(text("1 ponto = ${formatReais(1, state.pointValueCents)}", 14, false).apply { setTextColor(COLOR_MUTED) })
+            addView(secondaryButton("Configurar") { showPointValueDialog() })
+        })
+        content.addView(card {
             addView(text("Mesada diária", 18, true))
             val statusText = if (config.enabledSince != null)
                 "Ativa desde ${config.enabledSince} · ${config.amountPerDay} pontos/dia"
@@ -497,6 +506,45 @@ class MainActivity : Activity() {
             addView(text("${state.transactions.size} movimentações", 14, false))
         })
         content.addView(developerCard())
+    }
+
+    private fun showPointValueDialog() {
+        val layout = dialogLayout()
+        layout.addView(label("Valor em reais por ponto"))
+        val input = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            hint = "Ex: 0.33"
+            val current = state.pointValueCents / 100.0
+            setText(String.format(java.util.Locale("pt", "BR"), "%.2f", current).replace(',', '.'))
+            setSingleLine(true)
+        }
+        layout.addView(input)
+        layout.addView(text("Use ponto como separador decimal. Ex: 0.33 = R$ 0,33", 12, false).apply {
+            setTextColor(COLOR_MUTED)
+            setPadding(0, dp(4), 0, 0)
+        })
+        AlertDialog.Builder(this)
+            .setTitle("Valor do ponto")
+            .setView(layout)
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Salvar") { _, _ ->
+                val raw = input.text.toString().trim().replace(',', '.')
+                val value = raw.toDoubleOrNull()
+                if (value == null || value <= 0) {
+                    toast("Informe um valor válido.")
+                    return@setPositiveButton
+                }
+                val cents = (value * 100).toInt().coerceAtLeast(1)
+                state = state.copy(pointValueCents = cents)
+                repository.save(state)
+                render()
+            }
+            .show()
+    }
+
+    private fun formatReais(points: Int, pointValueCents: Int): String {
+        val total = points * pointValueCents / 100.0
+        return String.format(java.util.Locale("pt", "BR"), "R$ %.2f", total)
     }
 
     private fun showDailyAllowanceDialog() {

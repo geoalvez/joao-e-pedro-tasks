@@ -39,7 +39,8 @@ data class ActivityTask(
 data class MissionPhase(
     val id: String = UUID.randomUUID().toString(),
     val title: String,
-    val checked: Boolean = false
+    val checked: Boolean = false,
+    val checkedParticipantIds: List<String> = emptyList()
 )
 
 data class Mission(
@@ -50,10 +51,16 @@ data class Mission(
     val participantIds: List<String> = emptyList(),
     val phases: List<MissionPhase> = emptyList(),
     val completedAt: LocalDate? = null,
-    val rewardTransactionId: String? = null
+    val rewardTransactionId: String? = null,
+    val rewardPaidParticipantIds: List<String> = emptyList()
 ) {
-    fun isReadyToComplete(): Boolean = phases.isNotEmpty() && phases.all { it.checked }
-    fun isCompleted(): Boolean = completedAt != null
+    fun isReadyToComplete(): Boolean = participantIds.isNotEmpty() &&
+        participantIds.all { isReadyToCompleteFor(it) }
+    fun isReadyToCompleteFor(personId: String): Boolean =
+        phases.isNotEmpty() && phases.all { personId in it.checkedParticipantIds }
+    fun completedPhaseCountFor(personId: String): Int = phases.count { personId in it.checkedParticipantIds }
+    fun isCompleted(): Boolean = participantIds.isNotEmpty() &&
+        participantIds.all { it in rewardPaidParticipantIds }
 }
 
 data class RewardTransaction(

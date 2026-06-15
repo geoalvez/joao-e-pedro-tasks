@@ -143,13 +143,33 @@ class DomainServicesTest {
             rewardAmount = 10,
             participantIds = listOf("joao", "pedro"),
             phases = listOf(
-                MissionPhase(title = "Guardar brinquedos", checked = true),
-                MissionPhase(title = "Varrer", checked = false)
+                MissionPhase(title = "Guardar brinquedos", checkedParticipantIds = listOf("joao", "pedro")),
+                MissionPhase(title = "Varrer", checkedParticipantIds = listOf("joao"))
             )
         )
 
         assertFalse(mission.isReadyToComplete())
-        assertTrue(mission.copy(phases = mission.phases.map { it.copy(checked = true) }).isReadyToComplete())
+        assertFalse(mission.isReadyToCompleteFor("pedro"))
+        assertTrue(mission.copy(phases = mission.phases.map {
+            it.copy(checkedParticipantIds = listOf("joao", "pedro"))
+        }).isReadyToComplete())
+    }
+
+    @Test
+    fun missionProgressIsIndividualPerParticipant() {
+        val mission = Mission(
+            title = "Arrumar quarto",
+            rewardPersonId = "joao",
+            rewardAmount = 10,
+            participantIds = listOf("joao", "pedro"),
+            phases = listOf(
+                MissionPhase(title = "Etapa 1", checkedParticipantIds = listOf("joao")),
+                MissionPhase(title = "Etapa 2")
+            )
+        )
+
+        assertEquals(1, mission.completedPhaseCountFor("joao"))
+        assertEquals(0, mission.completedPhaseCountFor("pedro"))
     }
 
     @Test
@@ -162,18 +182,18 @@ class DomainServicesTest {
     @Test
     fun balanceUsesLedgerSigns() {
         val transactions = listOf(
-            RewardTransaction(personId = "joao", type = TransactionType.DEPOSIT, amount = 10, reason = "Ajudou"),
-            RewardTransaction(personId = "joao", type = TransactionType.WITHDRAW, amount = 3, reason = "Usou"),
-            RewardTransaction(personId = "joao", type = TransactionType.PENALTY, amount = 2, reason = "Penalidade")
+            RewardTransaction(personId = "joao", type = TransactionType.DEPOSIT, amount = 10.0, reason = "Ajudou"),
+            RewardTransaction(personId = "joao", type = TransactionType.WITHDRAW, amount = 3.0, reason = "Usou"),
+            RewardTransaction(personId = "joao", type = TransactionType.PENALTY, amount = 2.0, reason = "Penalidade")
         )
 
-        assertEquals(5, balances.balanceFor("joao", transactions))
+        assertEquals(5.0, balances.balanceFor("joao", transactions), 0.001)
     }
 
     @Test
     fun transactionRequiresPositiveAmountAndReason() {
-        expectIllegalArgument { balances.validate(0, "ok") }
-        expectIllegalArgument { balances.validate(1, "") }
+        expectIllegalArgument { balances.validate(0.0, "ok") }
+        expectIllegalArgument { balances.validate(1.0, "") }
     }
 
     private fun expectIllegalArgument(block: () -> Unit) {

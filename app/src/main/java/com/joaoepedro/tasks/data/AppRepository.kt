@@ -65,9 +65,11 @@ class AppRepository(context: Context) {
                             .put("id", phase.id)
                             .put("title", phase.title)
                             .put("checked", phase.checked)
+                            .put("checkedParticipantIds", JSONArray(phase.checkedParticipantIds))
                     }))
                     .put("completedAt", mission.completedAt?.toString())
                     .put("rewardTransactionId", mission.rewardTransactionId)
+                    .put("rewardPaidParticipantIds", JSONArray(mission.rewardPaidParticipantIds))
             }))
             .put("transactions", JSONArray(state.transactions.map { tx ->
                 JSONObject()
@@ -117,22 +119,35 @@ class AppRepository(context: Context) {
             )
         }
         val missions = root.optJSONArray("missions").toList { item ->
+            val participantIds = item.optJSONArray("participantIds").strings()
             Mission(
                 id = item.getString("id"),
                 title = item.getString("title"),
-                rewardPersonId = item.getString("rewardPersonId"),
+                rewardPersonId = item.optString("rewardPersonId").takeIf { it.isNotBlank() && it != "null" }
+                    ?: participantIds.firstOrNull().orEmpty(),
                 rewardAmount = item.getInt("rewardAmount"),
-                participantIds = item.optJSONArray("participantIds").strings(),
+                participantIds = participantIds,
                 phases = item.optJSONArray("phases").toList { phase ->
+                    val checkedParticipantIds = phase.optJSONArray("checkedParticipantIds").strings()
+                        .ifEmpty { if (phase.optBoolean("checked", false)) participantIds else emptyList() }
                     MissionPhase(
                         id = phase.getString("id"),
                         title = phase.getString("title"),
-                        checked = phase.optBoolean("checked", false)
+                        checked = phase.optBoolean("checked", false),
+                        checkedParticipantIds = checkedParticipantIds
                     )
                 },
                 completedAt = item.optString("completedAt").takeIf { it.isNotBlank() && it != "null" }
                     ?.let { LocalDate.parse(it) },
-                rewardTransactionId = item.optString("rewardTransactionId").takeIf { it.isNotBlank() && it != "null" }
+                rewardTransactionId = item.optString("rewardTransactionId").takeIf { it.isNotBlank() && it != "null" },
+                rewardPaidParticipantIds = item.optJSONArray("rewardPaidParticipantIds").strings()
+                    .ifEmpty {
+                        if (item.optString("rewardTransactionId").isNotBlank() && item.optString("rewardTransactionId") != "null") {
+                            participantIds
+                        } else {
+                            emptyList()
+                        }
+                    }
             )
         }
         val transactions = root.optJSONArray("transactions").toList { item ->

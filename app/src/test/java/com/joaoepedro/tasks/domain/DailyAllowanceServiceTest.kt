@@ -25,7 +25,7 @@ class DailyAllowanceServiceTest {
     private fun allowanceTransaction(personId: String, date: LocalDate) = RewardTransaction(
         personId = personId,
         type = TransactionType.DAILY_ALLOWANCE,
-        amount = 5,
+        amount = 5.0,
         reason = "Mesada diária",
         createdAt = date
     )
@@ -151,7 +151,7 @@ class DailyAllowanceServiceTest {
     fun `transacoes geradas tem o amount correto`() {
         val state = stateWith(DailyAllowanceConfig(amountPerDay = 10, enabledSince = today))
         val result = DailyAllowanceService.computeMissingDeposits(state, today)
-        assertTrue(result.all { it.amount == 10 })
+        assertTrue(result.all { it.amount == 10.0 })
     }
 
     // T13 — nenhuma pessoa ativa → nenhuma transação

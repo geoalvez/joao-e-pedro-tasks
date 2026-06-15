@@ -400,20 +400,25 @@ class MainActivity : Activity() {
             val participants = mission.participantIds
                 .mapNotNull { id -> state.people.firstOrNull { it.id == id }?.name }
                 .joinToString(", ").ifBlank { strings.noParticipants }
-            content.addView(card {
+            val missionCard = card {
                 addView(text(mission.title, 18, true))
                 addView(text(String.format(strings.labelRewardPerParticipant, mission.rewardAmount), 14, false).apply { setTextColor(COLOR_ACCENT) })
                 addView(text("${strings.labelParticipants}$participants", 14, false).apply { setTextColor(COLOR_MUTED) })
                 if (mission.phases.isEmpty()) addView(text(strings.noPhases, 14, false).apply { setTextColor(COLOR_MUTED) })
-                mission.phases.forEach { phase ->
-                    addView(CheckBox(context).apply {
-                        text = phase.title
-                        textSize = 14f
-                        setTextColor(COLOR_INK)
-                        isChecked = phase.checked
-                        isEnabled = !mission.isCompleted()
-                        setOnCheckedChangeListener { _, checked -> toggleMissionPhase(mission.id, phase.id, checked) }
-                    })
+                mission.participantIds.forEach { personId ->
+                    val personName = state.people.firstOrNull { it.id == personId }?.name ?: strings.noPersonAssigned
+                    val done = mission.completedPhaseCountFor(personId)
+                    val total = mission.phases.size
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        background = roundedDrawable(COLOR_BLUE_SOFT, 14f, 1, COLOR_BLUE)
+                        setPadding(dp(10), dp(8), dp(10), dp(8))
+                        addView(text(personName, 14, true), LinearLayout.LayoutParams(0, -2, 1f))
+                        addView(text("$done/$total", 14, true).apply {
+                            setTextColor(if (total > 0 && done == total) COLOR_GREEN else COLOR_BLUE)
+                        })
+                    }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(8), 0, 0) })
                 }
                 val status = when {
                     mission.isCompleted() -> strings.statusCompleted
@@ -430,12 +435,11 @@ class MainActivity : Activity() {
                     if (mission.participantIds.isNotEmpty()) {
                         addView(secondaryButton(strings.btnRemovePerson) { showRemoveMissionParticipantDialog(mission) })
                     }
-                    if (mission.isReadyToComplete()) {
-                        addView(primaryButton(strings.btnCompleteCredit) { completeMission(mission.id) })
-                    }
                 }
                 addView(secondaryButton(strings.btnDeleteMission) { confirmDeleteMission(mission.id, mission.title) })
-            })
+            }
+            missionCard.setOnClickListener { showMissionProgressDialog(mission.id) }
+            content.addView(missionCard)
         }
     }
 
@@ -960,6 +964,55 @@ class MainActivity : Activity() {
         dialog.show()
     }
 
+    private fun showMissionProgressDialog(missionId: String) {
+        val mission = state.missions.firstOrNull { it.id == missionId } ?: return
+        val layout = friendlyDialogLayout("Avancar missao", mission.title)
+        if (mission.participantIds.isEmpty()) {
+            layout.addView(empty(strings.noParticipants))
+        }
+        mission.participantIds.forEach { personId ->
+            val personName = state.people.firstOrNull { it.id == personId }?.name ?: strings.noPersonAssigned
+            val paid = personId in mission.rewardPaidParticipantIds
+            layout.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = roundedDrawable(Color.WHITE, 18f, 1, if (paid) COLOR_GREEN else COLOR_CARD_STROKE)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(text(personName, 17, true), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(text("${mission.completedPhaseCountFor(personId)}/${mission.phases.size}", 14, true).apply {
+                        setTextColor(if (paid) COLOR_GREEN else COLOR_BLUE)
+                    })
+                })
+                if (paid) {
+                    addView(text("Recompensa ja creditada", 12, true).apply {
+                        setTextColor(COLOR_GREEN)
+                        setPadding(0, dp(4), 0, dp(4))
+                    })
+                }
+                mission.phases.forEach { phase ->
+                    addView(CheckBox(context).apply {
+                        text = phase.title
+                        textSize = 14f
+                        setTextColor(COLOR_INK)
+                        isChecked = personId in phase.checkedParticipantIds
+                        isEnabled = !paid
+                        setOnCheckedChangeListener { _, checked ->
+                            toggleMissionPhase(mission.id, personId, phase.id, checked)
+                        }
+                    })
+                }
+            }, LinearLayout.LayoutParams(-1, -2).apply {
+                setMargins(0, 0, 0, dp(12))
+            })
+        }
+        AlertDialog.Builder(this)
+            .setView(ScrollView(this).apply { addView(layout) })
+            .setPositiveButton(strings.btnClose, null)
+            .show()
+    }
+
     private fun showMissionPhaseDialog(mission: Mission) {
         val layout = dialogLayout()
         val titleInput = edit(strings.hintPhaseName, "")
@@ -1090,6 +1143,11 @@ class MainActivity : Activity() {
                 try { balances.validate(amountInPoints, reason) } catch (e: IllegalArgumentException) { toast(e.message ?: strings.toastInformAmount); return@setPositiveButton }
                 val tx = RewardTransaction(personId = people[personSpinner.selectedItemPosition].id, type = TransactionType.entries[typeSpinner.selectedItemPosition], amount = amountInPoints, reason = reason)
                 persist(state.copy(transactions = state.transactions + tx))
+                defaultPersonId?.let { personId ->
+                    Handler(Looper.getMainLooper()).post {
+                        state.people.firstOrNull { it.id == personId }?.let { showPersonStatementDialog(it) }
+                    }
+                }
             }
             .show()
     }
@@ -1196,25 +1254,62 @@ class MainActivity : Activity() {
         toast(strings.toastSequenceInverted)
     }
 
-    private fun toggleMissionPhase(missionId: String, phaseId: String, checked: Boolean) {
+    private fun toggleMissionPhase(missionId: String, personId: String, phaseId: String, checked: Boolean) {
+        var rewardTransaction: RewardTransaction? = null
         val updatedMissions = state.missions.map { mission ->
-            if (mission.id == missionId && !mission.isCompleted()) {
-                mission.copy(phases = mission.phases.map { phase -> if (phase.id == phaseId) phase.copy(checked = checked) else phase })
-            } else mission
+            if (mission.id == missionId && personId !in mission.rewardPaidParticipantIds) {
+                val updatedPhases = mission.phases.map { phase ->
+                    if (phase.id == phaseId) {
+                        val ids = if (checked) {
+                            (phase.checkedParticipantIds + personId).distinct()
+                        } else {
+                            phase.checkedParticipantIds.filterNot { it == personId }
+                        }
+                        phase.copy(checkedParticipantIds = ids, checked = ids.containsAll(mission.participantIds))
+                    } else {
+                        phase
+                    }
+                }
+                val updatedMission = mission.copy(phases = updatedPhases)
+                if (updatedMission.isReadyToCompleteFor(personId)) {
+                    rewardTransaction = RewardTransaction(
+                        personId = personId,
+                        type = TransactionType.DEPOSIT,
+                        amount = mission.rewardAmount.toDouble(),
+                        reason = "Missao concluida: ${mission.title}"
+                    )
+                    updatedMission.copy(rewardPaidParticipantIds = (updatedMission.rewardPaidParticipantIds + personId).distinct())
+                } else {
+                    updatedMission
+                }
+            } else {
+                mission
+            }
         }
-        persist(state.copy(missions = updatedMissions))
+        val transactions = rewardTransaction?.let { state.transactions + it } ?: state.transactions
+        persist(state.copy(missions = updatedMissions, transactions = transactions))
+        if (rewardTransaction != null) toast(strings.toastRewardCredited)
     }
 
     private fun completeMission(missionId: String) {
         val mission = state.missions.firstOrNull { it.id == missionId } ?: return
-        if (mission.isCompleted()) { toast(strings.toastMissionConcluded); return }
-        if (!mission.isReadyToComplete()) { toast(strings.toastAllPhases); return }
+        val unpaidReadyParticipantIds = mission.participantIds
+            .filter { it !in mission.rewardPaidParticipantIds && mission.isReadyToCompleteFor(it) }
+        if (unpaidReadyParticipantIds.isEmpty()) { toast(strings.toastAllPhases); return }
         val recipientIds = mission.participantIds.ifEmpty { listOf(mission.rewardPersonId).filter { it.isNotBlank() } }
         if (recipientIds.isEmpty()) { toast(strings.toastNoParticipants); return }
-        val transactions = recipientIds.map { personId ->
+        val transactions = unpaidReadyParticipantIds.map { personId ->
             RewardTransaction(personId = personId, type = TransactionType.DEPOSIT, amount = mission.rewardAmount.toDouble(), reason = "Missao concluida: ${mission.title}")
         }
-        val updatedMissions = state.missions.map { if (it.id == mission.id) it.copy(completedAt = LocalDate.now(), rewardTransactionId = transactions.first().id) else it }
+        val updatedMissions = state.missions.map {
+            if (it.id == mission.id) {
+                it.copy(
+                    completedAt = if ((it.rewardPaidParticipantIds + unpaidReadyParticipantIds).distinct().containsAll(it.participantIds)) LocalDate.now() else it.completedAt,
+                    rewardTransactionId = transactions.firstOrNull()?.id ?: it.rewardTransactionId,
+                    rewardPaidParticipantIds = (it.rewardPaidParticipantIds + unpaidReadyParticipantIds).distinct()
+                )
+            } else it
+        }
         persist(state.copy(missions = updatedMissions, transactions = state.transactions + transactions))
         toast(strings.toastRewardCredited)
     }

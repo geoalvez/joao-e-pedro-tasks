@@ -1180,6 +1180,29 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun reversePenalty(tx: RewardTransaction, person: Person) {
+        AlertDialog.Builder(this)
+            .setTitle("Reverter penalidade")
+            .setMessage("Devolver ${tx.amount} pontos para ${person.name}?\n\n\"${tx.reason}\"")
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Reverter") { _, _ ->
+                val refund = RewardTransaction(
+                    personId = tx.personId,
+                    type = TransactionType.DEPOSIT,
+                    amount = tx.amount,
+                    reason = "Estorno: ${tx.reason}",
+                    createdAt = LocalDate.now()
+                )
+                val updated = state.transactions.map { t ->
+                    if (t.id == tx.id) t.copy(reversed = true) else t
+                } + refund
+                persist(state.copy(transactions = updated))
+                toast("Penalidade estornada.")
+                showPersonStatementDialog(person)
+            }
+            .show()
+    }
+
     private fun showPersonStatementDialog(person: Person) {
         val transactions = state.transactions
             .filter { it.personId == person.id }
@@ -1223,23 +1246,45 @@ class MainActivity : Activity() {
         } else {
             transactions.forEach { tx ->
                 val signed = tx.amount * tx.type.sign
-                layout.addView(LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    background = roundedDrawable(Color.WHITE, 14f, 1, if (signed >= 0) COLOR_GREEN else COLOR_RED)
+                val isReversedPenalty = tx.type == TransactionType.PENALTY && tx.reversed
+                val borderColor = when {
+                    isReversedPenalty -> COLOR_MUTED
+                    signed >= 0 -> COLOR_GREEN
+                    else -> COLOR_RED
+                }
+                val txRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = roundedDrawable(Color.WHITE, 14f, 1, borderColor)
                     setPadding(dp(12), dp(10), dp(12), dp(10))
                     addView(LinearLayout(context).apply {
-                        orientation = LinearLayout.VERTICAL
-                        addView(text(tx.reason, 15, true))
-                        addView(text("${tx.createdAt} | ${tx.type.label}", 12, false).apply {
-                            setTextColor(COLOR_MUTED)
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        addView(LinearLayout(context).apply {
+                            orientation = LinearLayout.VERTICAL
+                            addView(text(tx.reason, 15, true).apply {
+                                if (isReversedPenalty) paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+                            })
+                            addView(text("${tx.createdAt} | ${tx.type.label}${if (isReversedPenalty) " · Estornada" else ""}", 12, false).apply {
+                                setTextColor(COLOR_MUTED)
+                            })
+                        }, LinearLayout.LayoutParams(0, -2, 1f))
+                        addView(text("${signed.formatSigned()} pts", 16, true).apply {
+                            gravity = Gravity.CENTER
+                            setTextColor(if (isReversedPenalty) COLOR_MUTED else if (signed >= 0) COLOR_GREEN else COLOR_RED)
                         })
-                    }, LinearLayout.LayoutParams(0, -2, 1f))
-                    addView(text("${signed.formatSigned()} pts", 16, true).apply {
-                        gravity = Gravity.CENTER
-                        setTextColor(if (signed >= 0) COLOR_GREEN else COLOR_RED)
                     })
-                }, LinearLayout.LayoutParams(-1, -2).apply {
+                    if (tx.type == TransactionType.PENALTY && !tx.reversed) {
+                        addView(TextView(context).apply {
+                            text = "Reverter penalidade"
+                            textSize = 12f
+                            typeface = Typeface.DEFAULT_BOLD
+                            setTextColor(COLOR_BLUE)
+                            setPadding(0, dp(6), 0, 0)
+                            setOnClickListener { reversePenalty(tx, person) }
+                        })
+                    }
+                }
+                layout.addView(txRow, LinearLayout.LayoutParams(-1, -2).apply {
                     setMargins(0, 0, 0, dp(8))
                 })
             }

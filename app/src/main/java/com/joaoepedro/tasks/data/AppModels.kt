@@ -62,7 +62,8 @@ data class RewardTransaction(
     val type: TransactionType,
     val amount: Int,
     val reason: String,
-    val createdAt: LocalDate = LocalDate.now()
+    val createdAt: LocalDate = LocalDate.now(),
+    val reversed: Boolean = false
 )
 
 data class DailyAllowanceConfig(

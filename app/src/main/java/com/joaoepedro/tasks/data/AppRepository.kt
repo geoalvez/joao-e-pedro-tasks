@@ -77,6 +77,7 @@ class AppRepository(context: Context) {
                     .put("amount", tx.amount)
                     .put("reason", tx.reason)
                     .put("createdAt", tx.createdAt.toString())
+                    .put("reversed", tx.reversed)
             }))
             .put("dailyAllowance", JSONObject()
                 .put("amountPerDay", state.dailyAllowance.amountPerDay)
@@ -138,7 +139,8 @@ class AppRepository(context: Context) {
                 type = TransactionType.valueOf(item.getString("type")),
                 amount = item.getInt("amount"),
                 reason = item.getString("reason"),
-                createdAt = LocalDate.parse(item.getString("createdAt"))
+                createdAt = LocalDate.parse(item.getString("createdAt")),
+                reversed = item.optBoolean("reversed", false)
             )
         }
         val dailyAllowanceJson = root.optJSONObject("dailyAllowance")

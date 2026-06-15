@@ -3,6 +3,7 @@ package com.joaoepedro.tasks
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -26,6 +27,8 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.FileProvider
+import java.io.File
 import com.joaoepedro.tasks.data.ActivityTask
 import com.joaoepedro.tasks.data.AppRepository
 import com.joaoepedro.tasks.data.AppState
@@ -49,6 +52,7 @@ class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private var selectedTab = Tab.Today
     private var pendingPhotoPersonId: String? = null
+    private var pendingCameraFile: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,12 +69,12 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated Android callback kept to avoid extra dependencies.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode != RESULT_OK || data?.data == null) return
+        if (resultCode != RESULT_OK) return
         when (requestCode) {
-            EXPORT_REQUEST -> exportTo(data.data!!)
-            IMPORT_REQUEST -> importFrom(data.data!!)
+            EXPORT_REQUEST -> data?.data?.let { exportTo(it) }
+            IMPORT_REQUEST -> data?.data?.let { importFrom(it) }
             PHOTO_REQUEST -> {
-                val uri = data.data!!
+                val uri = data?.data ?: return
                 runCatching {
                     contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
@@ -82,6 +86,31 @@ class MainActivity : Activity() {
                 repository.save(state)
                 render()
                 toast("Foto atualizada!")
+            }
+            CAMERA_REQUEST -> {
+                val file = pendingCameraFile ?: return
+                pendingCameraFile = null
+                val personId = pendingPhotoPersonId ?: return
+                pendingPhotoPersonId = null
+                val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+                state = state.copy(people = state.people.map { p ->
+                    if (p.id == personId) p.copy(photoUri = uri.toString()) else p
+                })
+                repository.save(state)
+                render()
+                toast("Foto atualizada!")
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == CAMERA_PERMISSION_REQUEST) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                pendingPhotoPersonId?.let { launchCamera(it) }
+            } else {
+                pendingPhotoPersonId = null
+                toast("Permissão de câmera negada.")
             }
         }
     }
@@ -413,6 +442,7 @@ class MainActivity : Activity() {
                         addView(primaryButton("Concluir e creditar") { completeMission(mission.id) })
                     }
                 }
+                addView(secondaryButton("Excluir missão") { confirmDeleteMission(mission.id, mission.title) })
             })
         }
     }
@@ -694,20 +724,12 @@ class MainActivity : Activity() {
         layout.addView(label("Foto de perfil"))
         layout.addView(photoStatus)
         layout.addView(TextView(this).apply {
-            text = "📷  Escolher foto da galeria"
+            text = "📷  Escolher foto"
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_ORANGE_PRI)
             setPadding(0, dp(10), 0, dp(4))
-            setOnClickListener {
-                pendingPhotoPersonId = person.id
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "image/*"
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                }
-                startActivityForResult(intent, PHOTO_REQUEST)
-            }
+            setOnClickListener { choosePhotoSource(person.id) }
         })
         val builder = AlertDialog.Builder(this)
             .setTitle("Perfil — ${person.name}")
@@ -730,6 +752,45 @@ class MainActivity : Activity() {
             }
         }
         builder.show()
+    }
+
+    private fun choosePhotoSource(personId: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Escolher foto")
+            .setItems(arrayOf("Tirar foto com câmera", "Escolher da galeria")) { _, which ->
+                when (which) {
+                    0 -> {
+                        pendingPhotoPersonId = personId
+                        if (checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                            launchCamera(personId)
+                        } else {
+                            requestPermissions(arrayOf(android.Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
+                        }
+                    }
+                    1 -> {
+                        pendingPhotoPersonId = personId
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "image/*"
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                        }
+                        startActivityForResult(intent, PHOTO_REQUEST)
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun launchCamera(personId: String) {
+        val dir = File(cacheDir, "profile_photos").also { it.mkdirs() }
+        val file = File(dir, "photo_${personId}_${System.currentTimeMillis()}.jpg")
+        pendingCameraFile = file
+        pendingPhotoPersonId = personId
+        val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+        val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
+        }
+        startActivityForResult(intent, CAMERA_REQUEST)
     }
 
     private fun parseBirthDate(text: String): java.time.LocalDate? {
@@ -1036,6 +1097,18 @@ class MainActivity : Activity() {
                     if (it.id == mission.id) it.copy(participantIds = it.participantIds.filterNot { id -> id == person.id }) else it
                 }
                 persist(state.copy(missions = updatedMissions))
+            }
+            .show()
+    }
+
+    private fun confirmDeleteMission(missionId: String, missionTitle: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Excluir missão")
+            .setMessage("Deseja excluir \"$missionTitle\"? Esta ação não pode ser desfeita.")
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Excluir") { _, _ ->
+                persist(state.copy(missions = state.missions.filterNot { it.id == missionId }))
+                toast("Missão excluída.")
             }
             .show()
     }
@@ -1496,9 +1569,11 @@ class MainActivity : Activity() {
         java.time.Period.between(birthDate, LocalDate.now()).years
 
     private companion object {
-        const val EXPORT_REQUEST = 1101
-        const val IMPORT_REQUEST = 1102
-        const val PHOTO_REQUEST  = 1103
+        const val EXPORT_REQUEST          = 1101
+        const val IMPORT_REQUEST          = 1102
+        const val PHOTO_REQUEST           = 1103
+        const val CAMERA_REQUEST          = 1104
+        const val CAMERA_PERMISSION_REQUEST = 1105
         val COLOR_PAGE = Color.rgb(255, 255, 255)
         val COLOR_INK = Color.rgb(38, 50, 56)
         val COLOR_MUTED = Color.rgb(130, 130, 140)

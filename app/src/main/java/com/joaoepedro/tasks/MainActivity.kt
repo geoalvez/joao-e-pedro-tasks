@@ -676,12 +676,13 @@ class MainActivity : Activity() {
         repository.save(state)
         finished.forEach { session ->
             val personName = state.people.firstOrNull { it.id == session.personId }?.name ?: "Participante"
-            showPunishmentFinishedDialog(personName)
+            showPunishmentFinishedDialog(session.id, personName)
         }
     }
 
-    private fun showPunishmentFinishedDialog(personName: String) {
+    private fun showPunishmentFinishedDialog(sessionId: String, personName: String) {
         PunishmentAlarmReceiver.playAlertSound(this)
+        PunishmentAlarmReceiver.showNotification(this, sessionId, personName)
         AlertDialog.Builder(this)
             .setTitle("Castigo finalizado")
             .setMessage("$personName terminou o tempo de castigo.")

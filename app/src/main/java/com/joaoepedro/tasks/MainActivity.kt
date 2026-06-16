@@ -1181,6 +1181,7 @@ class MainActivity : Activity() {
             setTextColor(if (person.photoUri != null) COLOR_GREEN else COLOR_MUTED)
             setPadding(0, dp(4), 0, 0)
         }
+        layout.addView(profilePhotoPreview(person))
         layout.addView(label(strings.nameLabel))
         layout.addView(nameInput)
         layout.addView(label(strings.hintBirthDate))
@@ -1220,6 +1221,31 @@ class MainActivity : Activity() {
             }
         }
         builder.show()
+    }
+
+    private fun profilePhotoPreview(person: Person): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(6), 0, dp(12))
+            addView(ImageView(context).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                if (person.photoUri != null) {
+                    runCatching { setImageURI(Uri.parse(person.photoUri)) }
+                        .onFailure { setImageResource(R.drawable.ic_default_avatar) }
+                } else {
+                    setImageResource(R.drawable.ic_default_avatar)
+                }
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(v: android.view.View, o: android.graphics.Outline) {
+                        o.setOval(0, 0, v.width, v.height)
+                    }
+                }
+            }, LinearLayout.LayoutParams(dp(112), dp(112)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
+        }
     }
 
     private fun choosePhotoSource(personId: String) {

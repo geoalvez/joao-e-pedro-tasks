@@ -60,6 +60,9 @@ class MainActivity : Activity() {
     private var selectedTab = Tab.Today
     private var pendingPhotoPersonId: String? = null
     private var pendingCameraFile: File? = null
+    private var activeProfileDialogPersonId: String? = null
+    private var activeProfilePhotoPreview: ImageView? = null
+    private var activeProfilePhotoStatus: TextView? = null
     private var dashboardStartDate: LocalDate = LocalDate.now()
     private var dashboardEndDate: LocalDate = LocalDate.now()
     private val punishmentTicker = Handler(Looper.getMainLooper())
@@ -102,12 +105,7 @@ class MainActivity : Activity() {
                 runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
                 val personId = pendingPhotoPersonId ?: return
                 pendingPhotoPersonId = null
-                state = state.copy(people = state.people.map { p ->
-                    if (p.id == personId) p.copy(photoUri = uri.toString()) else p
-                })
-                repository.save(state)
-                render()
-                toast(strings.toastPhotoUpdated)
+                updatePersonPhoto(personId, uri.toString())
             }
             CAMERA_REQUEST -> {
                 val file = pendingCameraFile ?: return
@@ -115,12 +113,7 @@ class MainActivity : Activity() {
                 val personId = pendingPhotoPersonId ?: return
                 pendingPhotoPersonId = null
                 val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
-                state = state.copy(people = state.people.map { p ->
-                    if (p.id == personId) p.copy(photoUri = uri.toString()) else p
-                })
-                repository.save(state)
-                render()
-                toast(strings.toastPhotoUpdated)
+                updatePersonPhoto(personId, uri.toString())
             }
         }
     }
@@ -1171,6 +1164,7 @@ class MainActivity : Activity() {
     }
 
     private fun showPersonProfileDialog(person: Person) {
+        activeProfileDialogPersonId = person.id
         val layout = dialogLayout()
         val nameInput = edit(strings.hintChildName, person.name)
         val birthInput = edit("dd/mm/aaaa", person.birthDate?.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "").also { applyDateMask(it) }
@@ -1181,6 +1175,7 @@ class MainActivity : Activity() {
             setTextColor(if (person.photoUri != null) COLOR_GREEN else COLOR_MUTED)
             setPadding(0, dp(4), 0, 0)
         }
+        activeProfilePhotoStatus = photoStatus
         layout.addView(profilePhotoPreview(person))
         layout.addView(label(strings.nameLabel))
         layout.addView(nameInput)
@@ -1196,7 +1191,7 @@ class MainActivity : Activity() {
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_ORANGE_PRI)
             setPadding(0, dp(10), 0, dp(4))
-            setOnClickListener { choosePhotoSource(person.id) }
+            setOnClickListener { showProfilePhotoActions(person.id) }
         })
         val builder = AlertDialog.Builder(this)
             .setTitle(String.format(strings.titleEditProfile, person.name))
@@ -1220,7 +1215,14 @@ class MainActivity : Activity() {
                 }))
             }
         }
-        builder.show()
+        val dialog = builder.show()
+        dialog.setOnDismissListener {
+            if (activeProfileDialogPersonId == person.id) {
+                activeProfileDialogPersonId = null
+                activeProfilePhotoPreview = null
+                activeProfilePhotoStatus = null
+            }
+        }
     }
 
     private fun profilePhotoPreview(person: Person): View {
@@ -1229,6 +1231,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, dp(12))
             addView(ImageView(context).apply {
+                activeProfilePhotoPreview = this
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 if (person.photoUri != null) {
                     runCatching { setImageURI(Uri.parse(person.photoUri)) }
@@ -1242,37 +1245,78 @@ class MainActivity : Activity() {
                         o.setOval(0, 0, v.width, v.height)
                     }
                 }
+                setOnClickListener { showProfilePhotoActions(person.id) }
             }, LinearLayout.LayoutParams(dp(112), dp(112)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
             })
         }
     }
 
-    private fun choosePhotoSource(personId: String) {
+    private fun showProfilePhotoActions(personId: String) {
+        val person = state.people.firstOrNull { it.id == personId } ?: return
+        val options = if (person.photoUri != null) {
+            arrayOf("Atualizar pela galeria", "Atualizar pela camera", "Remover foto")
+        } else {
+            arrayOf("Escolher da galeria", "Usar camera")
+        }
         AlertDialog.Builder(this)
             .setTitle(strings.titlePhotoSource)
-            .setItems(arrayOf(strings.optCamera, strings.optGallery)) { _, which ->
+            .setItems(options) { _, which ->
+                if (person.photoUri != null && which == 2) {
+                    updatePersonPhoto(personId, null)
+                    return@setItems
+                }
                 when (which) {
-                    0 -> {
-                        pendingPhotoPersonId = personId
-                        if (checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                            launchCamera(personId)
-                        } else {
-                            requestPermissions(arrayOf(android.Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
-                        }
-                    }
-                    1 -> {
-                        pendingPhotoPersonId = personId
-                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                            addCategory(Intent.CATEGORY_OPENABLE)
-                            type = "image/*"
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                        }
-                        startActivityForResult(intent, PHOTO_REQUEST)
-                    }
+                    0 -> launchGallery(personId)
+                    1 -> requestCameraOrLaunch(personId)
                 }
             }
             .show()
+    }
+
+    private fun launchGallery(personId: String) {
+        pendingPhotoPersonId = personId
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, PHOTO_REQUEST)
+    }
+
+    private fun requestCameraOrLaunch(personId: String) {
+        pendingPhotoPersonId = personId
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            launchCamera(personId)
+        } else {
+            requestPermissions(arrayOf(android.Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
+        }
+    }
+
+    private fun updatePersonPhoto(personId: String, photoUri: String?) {
+        state = state.copy(people = state.people.map { p ->
+            if (p.id == personId) p.copy(photoUri = photoUri) else p
+        })
+        repository.save(state)
+        render()
+        updateActiveProfilePhotoViews(personId)
+        toast(strings.toastPhotoUpdated)
+    }
+
+    private fun updateActiveProfilePhotoViews(personId: String) {
+        if (activeProfileDialogPersonId != personId) return
+        val person = state.people.firstOrNull { it.id == personId } ?: return
+        val preview = activeProfilePhotoPreview ?: return
+        if (person.photoUri != null) {
+            runCatching { preview.setImageURI(Uri.parse(person.photoUri)) }
+                .onFailure { preview.setImageResource(R.drawable.ic_default_avatar) }
+        } else {
+            preview.setImageResource(R.drawable.ic_default_avatar)
+        }
+        activeProfilePhotoStatus?.apply {
+            text = if (person.photoUri != null) strings.photoSet else strings.noPhotoSelected
+            setTextColor(if (person.photoUri != null) COLOR_GREEN else COLOR_MUTED)
+        }
     }
 
     private fun launchCamera(personId: String) {
